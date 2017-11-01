@@ -9,51 +9,108 @@ class LL_LVM:
         """
         #pre-compute fixed parameters
         self.N = G.shape[0]; self.Dy = xinit.shape[0]; self.Dt = tinit.shape[0]
-        self.epsilon = epsilon; self.alpha = alpha; self.V = V; self.Vinv = ln.inv(V)
-        self.L = np.diag(G * np.ones(shape=(N,1))) - G
-        self.omega_inv = np.kron(2*L, np.identity(Dt))
-        self.J = np.kron(np.ones(shape=(N,1)),np.identity(Dt))
+        self.epsilon = epsilon; self.alpha = alpha; self.V = V; self.Vinv = chol_inv(V)
+        degree = list(set(np.sum(G,1)))[0]
+        self.L = np.identity(self.N)*degree - G
+        self.omega_inv = np.kron(2*self.L, np.identity(self.Dt))
+        self.J = np.kron(np.ones(shape=(self.N,1)),np.identity(self.Dt))
+        self.sigma_x_inv = np.kron(self.epsilon * np.ones(shape=(self.N,1)) * np.ones(shape=(1,self.N)), np.identity(self.Dy)) + 2 * np.kron(self.L , self.Vinv)
+        self.sigma_x = chol_inv(self.sigma_x_inv)
+        #todo: use Cholesky decomposition to invert this
+        #temporary fix: add some jitter
+        #jitter =  np.diag(np.random.chisquare(10,size=self.N*self.Dy))
+        #self.sigma_x = sigma_x + jitter
+        
+        self.t_priorcov = ln.inv(alpha*np.identity(self.N) + 2*self.L)
+        self.C_priorcov = ln.inv(epsilon * self.J * self.J.T + self.omega_inv)
         
         #create a dictionary of neighbors
         self.neighbors = {i:np.where(G[i,:]==1)[0] for i in range(N)}
         
         #initialize latent variables and observations
-        self.C = Cinit; self.t = tinit; self.x = xinit
+        self.C = Cinit; self.t = tinit; self.x = xinit #just put observed if standard LL_LVM
         #list of Dy by Dt numpy arrays for each observation's linear map C_i
-        self.Ci = [C[:,np.arange(i*Dt,(i+1)*Dt)] for i in range(N)]
-        if yinit!=0:
+        self.Ci = [self.C[:,np.arange(i*self.Dt,(i+1)*self.Dt)] for i in range(self.N)]
+        if yobserved!=0: #for the noisy LL_LVM model
             self.y = yobserved
         
-        self.e = [-1 * np.sum([Vinv * (self.Ci[i] + self.Ci[j])*(self.t[:,i] - self.t[:,j]) for j in neighbors[i]]) for i in range(N)]
-    
+        #self.e = [-1 * np.sum([self.Vinv * (self.Ci[i] + self.Ci[j])*(self.t[:,i] - self.t[:,j]) for j in self.neighbors[i]]) for i in range(self.N)]
+        self.e = np.array([-1 * np.array([self.Vinv * np.matrix((self.Ci[i] + self.Ci[j]))*np.matrix((self.t[:,i] - self.t[:,j])) for j in self.neighbors[i]]).sum(0) for i in range(self.N)]).flatten()
+        #initialize variables to store proposed values of each
+        self.Cprop = np.zeros(shape=(self.Dy,self.N*self.Dt))
+        self.Ciprop = [self.Cprop[:,np.arange(i*self.Dt,(i+1)*self.Dt)] for i in range(self.N)]
+        self.tprop = np.zeros(shape = (self.Dt, self.N))
+        self.xprop = xinit #np.zeros(shape = (self.Dy, self.N))
+        
+        #initialize variables to store trace and likelihood
+        self.trace = []; self.likelihoods = []
+        
     #calculate likelihood for proposed latent variables
     def likelihood(self,proposed=False):
+        
+        #x factor changes and y factor added for noisy version **
+        
         #proposed contains all latent variables in one array
         if proposed:
             #calculate likelihood under proposed value
-            
+            Cfactor = np.log(matrix_normal(self.Cprop,np.zeros(shape=(self.Dy, self.N*self.Dt)),np.identity(self.Dy),self.C_priorcov))
+            tfactor = np.log(matrix_normal(self.tprop,np.zeros(self.Dt),np.identity(self.Dt),self.t_priorcov))
+            mu_x = self.sigma_x * self.eprop 
+            xfactor = np.log(scipy.stats.multivariate_normal.pdf(self.x.reshape((self.N*self.Dy,1)),mu_x,self.sigma_x,allow_singular=True))
+            return Cfactor + tfactor + xfactor
+
         else:
-            #if proposed is empty just calculate it under the current variables
-            
+            #if proposed is false just calculate it under the current variables
+            Cfactor = np.log(matrix_normal(self.C,np.zeros(shape=(self.Dy, self.N*self.Dt)),np.identity(self.Dy),self.C_priorcov))
+            tfactor = np.log(matrix_normal(self.t,np.zeros(self.Dt),np.identity(self.Dt),self.t_priorcov))
+            mu_x = np.matrix(self.sigma_x) * self.e.reshape((self.N*self.Dy,1))
+            xfactor = np.log(scipy.stats.multivariate_normal.pdf(self.x.reshape((self.N*self.Dy,1)),mean= list(mu_x.flat),cov=self.sigma_x,allow_singular=True))
+            return Cfactor + tfactor + xfactor
     
     #update with Metropolis-Hastings step
     def update(self,proposed):
         #calculate likelihoods
+        Lprime = self.likelihood(proposed=True)
+        L = self.likelihood()
         
         #calculate acceptance probability
+        a = min(1.0,np.exp(Lprime - L))
+        acceptance = np.random.choice([0,1],p=(1-a,a))
         
         #update the variables
-        
-        #update the precomputed values 
-        self.e = [-1 * np.sum([Vinv * (self.Ci[i] + self.Ci[j])*(self.t[:,i] - self.t[:,j]) \ 
-        for j in neighbors[i]]) for i in range(N)]
+        if acceptance:
+            self.C = np.copy(self.Cprop)
+            self.t = np.copy(self.tprop)
+           # self.x = #take from proposed
+            self.Ci = [self.C[:,np.arange(i*self.Dt,(i+1)*self.Dt)] for i in range(self.N)]
+            self.e = np.array([-1 * np.array([self.Vinv * np.matrix((self.Ci[i] + self.Ci[j]))*np.matrix((self.t[:,i] - self.t[:,j])) for j in self.neighbors[i]]).sum(0) for i in range(self.N)]).flatten()
+            
+            #add acceptance for x here for noisy version**
     
-    #propose a new value    
+    #propose a new value based on current values
     def propose(self):
-        
-    
+        #drawn from MVN centered at C
+        self.Cprop = np.random.multivariate_normal(self.C.reshape((self.Dy*self.Dt*self.N)),self.Cpropcov).reshape((self.Dy,self.Dt*self.N))
+        self.Ciprop = [self.Cprop[:,np.arange(i*self.Dt,(i+1)*self.Dt)] for i in range(self.N)]
+        #drawn from MVN centered at t
+        self.tprop = np.random.multivariate_normal(self.C.reshape((self.Dt*self.N)),self.tpropcov).reshape((self.Dt,self.N))
+        self.e = np.array([-1 * np.array([self.Vinv * np.matrix((self.Ciprop[i] + self.Ciprop[j]))*np.matrix((self.tprop[:,i] - self.tprop[:,j])) for j in self.neighbors[i]]).sum(0) for i in range(self.N)]).flatten()
+
+        #add proposal for x here for noisy version**
+
     def MH_step(self):
         #propose
+        self.propose()
         #update
-    
+        self.update()
+        #store new likelihood
+        self.likelihoods.append(self.likelihood())
+
+
+
+
+
+
+
+
 

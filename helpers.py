@@ -7,9 +7,17 @@ def L(G):
 def omega_inv(L,Dt):
     np.kron(2*L, np.identity(Dt))
 
-def matrix_normal(Astar,M,U,V):
+def matrix_normal(A,M,U,V):
     n,p = A.shape
-    return (np.exp(-.5 * ln.inv(V) * (A-M).T * \
-    ln.inv(U) * (A-M)) / ((2 * np.pi)**(n*p/2.0) \ 
-    * ln.det(V)**(n/2.0) * ln.det(U)**(p/2.0))
+    A = np.matrix(A); M = np.matrix(M); U = np.matrix(U); V = np.matrix(V)
+    return np.exp(-.5 * np.trace(ln.inv(V) * (A-M).T * ln.inv(U) * (A-M))) / ((2 * np.pi)**(n*p/2.0) * ln.det(V)**(n/2.0) * ln.det(U)**(p/2.0))
+
+def chol_inv(X):
+    L = np.linalg.cholesky(X)
+    Linv = scipy.linalg.solve_triangular(L,np.identity(L.shape[0]),lower=True)
+    return Linv.T * np.matrix(Linv)
+
+
+
+
 
