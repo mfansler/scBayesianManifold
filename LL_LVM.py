@@ -22,7 +22,7 @@ class LL_LVM:
         #list of Dy by Dt numpy arrays for each observation's linear map C_i
         self.Ci = [C[:,np.arange(i*Dt,(i+1)*Dt)] for i in range(N)]
         if yinit!=0:
-            self.y = yinit
+            self.y = yobserved
         
         self.e = [-1 * np.sum([Vinv * (self.Ci[i] + self.Ci[j])*(self.t[:,i] - self.t[:,j]) for j in neighbors[i]]) for i in range(N)]
     
