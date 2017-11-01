@@ -10,11 +10,11 @@ class LL_LVM:
         #pre-compute fixed parameters
         self.N = G.shape[0]; self.Dy = xinit.shape[0]; self.Dt = tinit.shape[0]
         self.epsilon = epsilon; self.alpha = alpha; self.V = V; self.Vinv = chol_inv(V)
-        degree = list(set(np.sum(G,1)))[0]
-        self.L = np.identity(self.N)*degree - G
+        degree = np.sum(G,1)
+        self.L = np.diag(degree) - G
         self.omega_inv = np.kron(2*self.L, np.identity(self.Dt))
         self.J = np.kron(np.ones(shape=(self.N,1)),np.identity(self.Dt))
-        self.sigma_x_inv = np.kron(self.epsilon * np.ones(shape=(self.N,1)) * np.ones(shape=(1,self.N)), np.identity(self.Dy)) + 2 * np.kron(self.L , self.Vinv)
+        self.sigma_x_inv = np.kron(self.epsilon * np.ones(shape=(self.N,1)) * np.ones(shape=(1,self.N)), np.identity(self.Dy)) + np.kron(2*self.L , self.Vinv)
         self.sigma_x = chol_inv(self.sigma_x_inv)
         #todo: use Cholesky decomposition to invert this
         #temporary fix: add some jitter
@@ -105,6 +105,15 @@ class LL_LVM:
         self.update()
         #store new likelihood
         self.likelihoods.append(self.likelihood())
+
+
+
+
+
+
+
+
+
 
 
 
