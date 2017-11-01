@@ -1,12 +1,3 @@
-from numpy import linalg as ln
-
-def L(G):
-    n = G.shape[0]
-    return np.diag(G * np.ones(shape=(n,1))) - G
-
-def omega_inv(L,Dt):
-    np.kron(2*L, np.identity(Dt))
-
 def matrix_normal(A,M,U,V):
     n,p = A.shape
     A = np.matrix(A); M = np.matrix(M); U = np.matrix(U); V = np.matrix(V)
@@ -16,6 +7,9 @@ def chol_inv(X):
     L = np.linalg.cholesky(X)
     Linv = scipy.linalg.solve_triangular(L,np.identity(L.shape[0]),lower=True)
     return Linv.T * np.matrix(Linv)
+
+
+
 
 
 

@@ -1,5 +1,5 @@
 class LL_LVM:
-    def __init__(self,G,epsilon,alpha,V,Cinit,tinit,xinit,yobserved=0):
+    def __init__(self,G,epsilon,alpha,V,Cinit,tinit,xinit,stepsize,yobserved=0):
         """
         G is the N by N nearest-neighbor graph adjacency matrix
         Cinit is the Dy by N*Dt matrix of initial linear maps
@@ -15,14 +15,18 @@ class LL_LVM:
         self.omega_inv = np.kron(2*self.L, np.identity(self.Dt))
         self.J = np.kron(np.ones(shape=(self.N,1)),np.identity(self.Dt))
         self.sigma_x_inv = np.kron(self.epsilon * np.ones(shape=(self.N,1)) * np.ones(shape=(1,self.N)), np.identity(self.Dy)) + np.kron(2*self.L , self.Vinv)
+        #self.sigma_x = ln.inv(self.sigma_x_inv)
+        
+        #add some jitter to condition properly
+        jitter = np.random.chisquare(.5,self.Dy*self.N)
+        self.sigma_x_inv = self.sigma_x_inv + np.diag(jitter)
         self.sigma_x = chol_inv(self.sigma_x_inv)
-        #todo: use Cholesky decomposition to invert this
-        #temporary fix: add some jitter
-        #jitter =  np.diag(np.random.chisquare(10,size=self.N*self.Dy))
-        #self.sigma_x = sigma_x + jitter
         
         self.t_priorcov = ln.inv(alpha*np.identity(self.N) + 2*self.L)
         self.C_priorcov = ln.inv(epsilon * self.J * self.J.T + self.omega_inv)
+        
+        self.Cpropcov = np.identity(self.N * self.Dy * self.Dt) * stepsize
+        self.tpropcov = np.identity(self.N * self.Dt) * stepsize
         
         #create a dictionary of neighbors
         self.neighbors = {i:np.where(G[i,:]==1)[0] for i in range(N)}
@@ -55,16 +59,18 @@ class LL_LVM:
             #calculate likelihood under proposed value
             Cfactor = np.log(matrix_normal(self.Cprop,np.zeros(shape=(self.Dy, self.N*self.Dt)),np.identity(self.Dy),self.C_priorcov))
             tfactor = np.log(matrix_normal(self.tprop,np.zeros(self.Dt),np.identity(self.Dt),self.t_priorcov))
-            mu_x = self.sigma_x * self.eprop 
-            xfactor = np.log(scipy.stats.multivariate_normal.pdf(self.x.reshape((self.N*self.Dy,1)),mu_x,self.sigma_x,allow_singular=True))
+            mu_x = np.matrix(self.sigma_x) * self.eprop.reshape((self.N*self.Dy,1))
+            xfactor = np.log(scipy.stats.multivariate_normal.pdf(self.x.reshape((self.N*self.Dy,1)).T,mean= list(mu_x.flat),cov=self.sigma_x))
+            print Cfactor, tfactor, xfactor
             return Cfactor + tfactor + xfactor
-
+            
         else:
             #if proposed is false just calculate it under the current variables
             Cfactor = np.log(matrix_normal(self.C,np.zeros(shape=(self.Dy, self.N*self.Dt)),np.identity(self.Dy),self.C_priorcov))
             tfactor = np.log(matrix_normal(self.t,np.zeros(self.Dt),np.identity(self.Dt),self.t_priorcov))
             mu_x = np.matrix(self.sigma_x) * self.e.reshape((self.N*self.Dy,1))
-            xfactor = np.log(scipy.stats.multivariate_normal.pdf(self.x.reshape((self.N*self.Dy,1)),mean= list(mu_x.flat),cov=self.sigma_x,allow_singular=True))
+            xfactor = np.log(scipy.stats.multivariate_normal.pdf(self.x.reshape((self.N*self.Dy,1)).T,mean= list(mu_x.flat),cov=self.sigma_x))
+            print Cfactor, tfactor, xfactor
             return Cfactor + tfactor + xfactor
     
     #update with Metropolis-Hastings step
@@ -81,7 +87,6 @@ class LL_LVM:
         if acceptance:
             self.C = np.copy(self.Cprop)
             self.t = np.copy(self.tprop)
-           # self.x = #take from proposed
             self.Ci = [self.C[:,np.arange(i*self.Dt,(i+1)*self.Dt)] for i in range(self.N)]
             self.e = np.array([-1 * np.array([self.Vinv * np.matrix((self.Ci[i] + self.Ci[j]))*np.matrix((self.t[:,i] - self.t[:,j])) for j in self.neighbors[i]]).sum(0) for i in range(self.N)]).flatten()
             
@@ -93,8 +98,8 @@ class LL_LVM:
         self.Cprop = np.random.multivariate_normal(self.C.reshape((self.Dy*self.Dt*self.N)),self.Cpropcov).reshape((self.Dy,self.Dt*self.N))
         self.Ciprop = [self.Cprop[:,np.arange(i*self.Dt,(i+1)*self.Dt)] for i in range(self.N)]
         #drawn from MVN centered at t
-        self.tprop = np.random.multivariate_normal(self.C.reshape((self.Dt*self.N)),self.tpropcov).reshape((self.Dt,self.N))
-        self.e = np.array([-1 * np.array([self.Vinv * np.matrix((self.Ciprop[i] + self.Ciprop[j]))*np.matrix((self.tprop[:,i] - self.tprop[:,j])) for j in self.neighbors[i]]).sum(0) for i in range(self.N)]).flatten()
+        self.tprop = np.random.multivariate_normal(self.t.reshape((self.Dt*self.N)),self.tpropcov).reshape((self.Dt,self.N))
+        self.eprop = np.array([-1 * np.array([self.Vinv * np.matrix((self.Ciprop[i] + self.Ciprop[j]))*np.matrix((self.tprop[:,i] - self.tprop[:,j])) for j in self.neighbors[i]]).sum(0) for i in range(self.N)]).flatten()
 
         #add proposal for x here for noisy version**
 
@@ -105,20 +110,6 @@ class LL_LVM:
         self.update()
         #store new likelihood
         self.likelihoods.append(self.likelihood())
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
