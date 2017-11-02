@@ -18,8 +18,8 @@ class LL_LVM:
         #self.sigma_x = ln.inv(self.sigma_x_inv)
         
         #add some jitter to condition properly
-        jitter = np.random.chisquare(.5,self.Dy*self.N)
-        self.sigma_x_inv = self.sigma_x_inv + np.diag(jitter)
+       # jitter = np.random.chisquare(.5,self.Dy*self.N)
+        #self.sigma_x_inv = self.sigma_x_inv + np.diag(jitter)
         self.sigma_x = chol_inv(self.sigma_x_inv)
         
         self.t_priorcov = ln.inv(alpha*np.identity(self.N) + 2*self.L)
@@ -57,28 +57,32 @@ class LL_LVM:
         #proposed contains all latent variables in one array
         if proposed:
             #calculate likelihood under proposed value
-            Cfactor = np.log(matrix_normal(self.Cprop,np.zeros(shape=(self.Dy, self.N*self.Dt)),np.identity(self.Dy),self.C_priorcov))
-            tfactor = np.log(matrix_normal(self.tprop,np.zeros(self.Dt),np.identity(self.Dt),self.t_priorcov))
+            #Cfactor = np.log(matrix_normal(self.Cprop,np.zeros(shape=(self.Dy, self.N*self.Dt)),np.identity(self.Dy),self.C_priorcov))
+            #tfactor = np.log(matrix_normal(self.tprop,np.zeros(self.Dt),np.identity(self.Dt),self.t_priorcov))
+            Cfactor = matrix_normal_log(self.Cprop,np.zeros(shape=(self.Dy, self.N*self.Dt)),np.identity(self.Dy),self.C_priorcov)
+            tfactor = matrix_normal_log(self.tprop,np.zeros(self.Dt),np.identity(self.Dt),self.t_priorcov)
             mu_x = np.matrix(self.sigma_x) * self.eprop.reshape((self.N*self.Dy,1))
-            xfactor = np.log(scipy.stats.multivariate_normal.pdf(self.x.reshape((self.N*self.Dy,1)).T,mean= list(mu_x.flat),cov=self.sigma_x))
-            print Cfactor, tfactor, xfactor
+            xfactor = scipy.stats.multivariate_normal.logpdf(self.x.reshape((self.N*self.Dy,1)).T,mean= list(mu_x.flat),cov=self.sigma_x)
+            #print Cfactor, tfactor, xfactor
             return Cfactor + tfactor + xfactor
             
         else:
             #if proposed is false just calculate it under the current variables
-            Cfactor = np.log(matrix_normal(self.C,np.zeros(shape=(self.Dy, self.N*self.Dt)),np.identity(self.Dy),self.C_priorcov))
-            tfactor = np.log(matrix_normal(self.t,np.zeros(self.Dt),np.identity(self.Dt),self.t_priorcov))
+            #Cfactor = np.log(matrix_normal(self.C,np.zeros(shape=(self.Dy, self.N*self.Dt)),np.identity(self.Dy),self.C_priorcov))
+            #tfactor = np.log(matrix_normal(self.t,np.zeros(self.Dt),np.identity(self.Dt),self.t_priorcov))
+            Cfactor = matrix_normal_log(self.C,np.zeros(shape=(self.Dy, self.N*self.Dt)),np.identity(self.Dy),self.C_priorcov)
+            tfactor = matrix_normal_log(self.t,np.zeros(self.Dt),np.identity(self.Dt),self.t_priorcov)
             mu_x = np.matrix(self.sigma_x) * self.e.reshape((self.N*self.Dy,1))
-            xfactor = np.log(scipy.stats.multivariate_normal.pdf(self.x.reshape((self.N*self.Dy,1)).T,mean= list(mu_x.flat),cov=self.sigma_x))
-            print Cfactor, tfactor, xfactor
+            xfactor = scipy.stats.multivariate_normal.logpdf(self.x.reshape((self.N*self.Dy,1)).T,mean= list(mu_x.flat),cov=self.sigma_x)
+            #print Cfactor, tfactor, xfactor
             return Cfactor + tfactor + xfactor
     
     #update with Metropolis-Hastings step
-    def update(self,proposed):
+    def update(self):
         #calculate likelihoods
         Lprime = self.likelihood(proposed=True)
         L = self.likelihood()
-        
+        print Lprime - L
         #calculate acceptance probability
         a = min(1.0,np.exp(Lprime - L))
         acceptance = np.random.choice([0,1],p=(1-a,a))
@@ -110,6 +114,7 @@ class LL_LVM:
         self.update()
         #store new likelihood
         self.likelihoods.append(self.likelihood())
+
 
 
 
