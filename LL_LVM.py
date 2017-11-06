@@ -46,6 +46,8 @@ class LL_LVM:
         self.tfinal = np.zeros(shape = (self.Dt, self.N))
         #self.xprop = xinit #np.zeros(shape = (self.Dy, self.N))
         
+        self.acceptance = 0
+        
         #initialize variables to store trace and likelihood
         self.trace = []; self.likelihoods = []
         
@@ -92,7 +94,7 @@ class LL_LVM:
             self.t = np.copy(self.tprop)
             self.Ci = [self.C[:,np.arange(i*self.Dt,(i+1)*self.Dt)] for i in range(self.N)]
             self.e = np.array([-1 * np.array([self.Vinv * np.matrix((self.Ci[i] + self.Ci[j]))*np.matrix((self.t[:,i] - self.t[:,j])) for j in self.neighbors[i]]).sum(0) for i in range(self.N)]).flatten()
-            
+            self.acceptance+=1
             #add acceptance for x here for noisy version**
     
     #propose a new value based on current values
@@ -116,3 +118,4 @@ class LL_LVM:
         if not burn_in:
             self.Cfinal = self.Cfinal + self.C
             self.tfinal = self.tfinal + self.t
+
