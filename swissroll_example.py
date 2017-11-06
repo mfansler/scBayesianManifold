@@ -1,20 +1,26 @@
-data = datasets.make_swiss_roll(100,.01)
-x = preprocessing.normalize(data[0])
+data = datasets.make_swiss_roll(300,.1)
+#x = preprocessing.normalize(data[0])
+x = data[0] / np.sum(data[0],0)
 x = x.T
 t_true = data[1].T
 Dy,N = x.shape
 Dt = 1
 
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+ax.scatter(x[0,:], x[1,:], x[2,:], c=t_true, marker='o')
+plt.show()
+
 tinit = np.random.multivariate_normal([0] * Dt * N, np.identity(Dt * N)*.25).reshape((1,N))
 Cinit = np.random.multivariate_normal([0] * Dt * N * Dy, np.identity(Dt * N * Dy)*.25).reshape(Dy,Dt*N)
 
 #build nearest neighbor graph
-G = neighbors.kneighbors_graph(x.T,7).toarray()
+G = neighbors.kneighbors_graph(x.T,20).toarray()
 G = ((G + G.T) > 0) * 1.0
 
 #set user-defined parameters
 alpha = 1.0
-gamma =100.0
+gamma =10.0
 epsilon = .00001
 #V = np.identity(Dy) * gamma
 V = np.cov(x) * gamma
@@ -30,14 +36,12 @@ V = np.cov(x) * gamma
 #Cinit = np.random.multivariate_normal(np.zeros(shape=(Dy*N*Dt)),np.kron(np.identity(Dy),C_priorcov)).reshape((Dy,Dt*N))
 
 
-model = LL_LVM(G,epsilon,alpha,V,Cinit,tinit,x,.5)
+model = LL_LVM(G,epsilon,alpha,V,Cinit,tinit,x,.0005)
 model.likelihood()
 model.propose()
 model.likelihood(proposed=True)
 
-for i in range(10000):
+for i in range(100):
     model.MH_step()
 
-
-
-
+model.likelihoods

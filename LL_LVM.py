@@ -41,10 +41,10 @@ class LL_LVM:
         #self.e = [-1 * np.sum([self.Vinv * (self.Ci[i] + self.Ci[j])*(self.t[:,i] - self.t[:,j]) for j in self.neighbors[i]]) for i in range(self.N)]
         self.e = np.array([-1 * np.array([self.Vinv * np.matrix((self.Ci[i] + self.Ci[j]))*np.matrix((self.t[:,i] - self.t[:,j])) for j in self.neighbors[i]]).sum(0) for i in range(self.N)]).flatten()
         #initialize variables to store proposed values of each
-        self.Cprop = np.zeros(shape=(self.Dy,self.N*self.Dt))
-        self.Ciprop = [self.Cprop[:,np.arange(i*self.Dt,(i+1)*self.Dt)] for i in range(self.N)]
-        self.tprop = np.zeros(shape = (self.Dt, self.N))
-        self.xprop = xinit #np.zeros(shape = (self.Dy, self.N))
+        self.Cfinal = np.zeros(shape=(self.Dy,self.N*self.Dt))
+        #self.Ciprop = [self.Cprop[:,np.arange(i*self.Dt,(i+1)*self.Dt)] for i in range(self.N)]
+        self.tfinal = np.zeros(shape = (self.Dt, self.N))
+        #self.xprop = xinit #np.zeros(shape = (self.Dy, self.N))
         
         #initialize variables to store trace and likelihood
         self.trace = []; self.likelihoods = []
@@ -59,8 +59,8 @@ class LL_LVM:
             #calculate likelihood under proposed value
             #Cfactor = np.log(matrix_normal(self.Cprop,np.zeros(shape=(self.Dy, self.N*self.Dt)),np.identity(self.Dy),self.C_priorcov))
             #tfactor = np.log(matrix_normal(self.tprop,np.zeros(self.Dt),np.identity(self.Dt),self.t_priorcov))
-            Cfactor = matrix_normal_log(self.Cprop,np.zeros(shape=(self.Dy, self.N*self.Dt)),np.identity(self.Dy),self.C_priorcov)
-            tfactor = matrix_normal_log(self.tprop,np.zeros(self.Dt),np.identity(self.Dt),self.t_priorcov)
+            Cfactor = matrix_normal_log_star(self.Cprop,np.zeros(shape=(self.Dy, self.N*self.Dt)),np.identity(self.Dy),self.C_priorcov)
+            tfactor = matrix_normal_log_star(self.tprop,np.zeros(self.Dt),np.identity(self.Dt),self.t_priorcov)
             mu_x = np.matrix(self.sigma_x) * self.eprop.reshape((self.N*self.Dy,1))
             xfactor = scipy.stats.multivariate_normal.logpdf(self.x.reshape((self.N*self.Dy,1)).T,mean= list(mu_x.flat),cov=self.sigma_x)
             #print Cfactor, tfactor, xfactor
@@ -70,8 +70,8 @@ class LL_LVM:
             #if proposed is false just calculate it under the current variables
             #Cfactor = np.log(matrix_normal(self.C,np.zeros(shape=(self.Dy, self.N*self.Dt)),np.identity(self.Dy),self.C_priorcov))
             #tfactor = np.log(matrix_normal(self.t,np.zeros(self.Dt),np.identity(self.Dt),self.t_priorcov))
-            Cfactor = matrix_normal_log(self.C,np.zeros(shape=(self.Dy, self.N*self.Dt)),np.identity(self.Dy),self.C_priorcov)
-            tfactor = matrix_normal_log(self.t,np.zeros(self.Dt),np.identity(self.Dt),self.t_priorcov)
+            Cfactor = matrix_normal_log_star(self.C,np.zeros(shape=(self.Dy, self.N*self.Dt)),np.identity(self.Dy),self.C_priorcov)
+            tfactor = matrix_normal_log_star(self.t,np.zeros(self.Dt),np.identity(self.Dt),self.t_priorcov)
             mu_x = np.matrix(self.sigma_x) * self.e.reshape((self.N*self.Dy,1))
             xfactor = scipy.stats.multivariate_normal.logpdf(self.x.reshape((self.N*self.Dy,1)).T,mean= list(mu_x.flat),cov=self.sigma_x)
             #print Cfactor, tfactor, xfactor
@@ -82,7 +82,6 @@ class LL_LVM:
         #calculate likelihoods
         Lprime = self.likelihood(proposed=True)
         L = self.likelihood()
-        print Lprime - L
         #calculate acceptance probability
         a = min(1.0,np.exp(Lprime - L))
         acceptance = np.random.choice([0,1],p=(1-a,a))
@@ -107,15 +106,13 @@ class LL_LVM:
 
         #add proposal for x here for noisy version**
 
-    def MH_step(self):
+    def MH_step(self,burn_in=False):
         #propose
         self.propose()
         #update
         self.update()
         #store new likelihood
         self.likelihoods.append(self.likelihood())
-
-
-
-
-
+        if not burn_in:
+            self.Cfinal = self.Cfinal + self.C
+            self.tfinal = self.tfinal + self.t
