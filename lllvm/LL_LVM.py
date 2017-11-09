@@ -1,5 +1,11 @@
+from .utils import chol_inv, matrix_normal_log_star
+import numpy as np
+import numpy.linalg as ln
+from scipy.stats import multivariate_normal as mvn
+
+
 class LL_LVM:
-    def __init__(self,G,epsilon,alpha,V,Cinit,tinit,xinit,stepsize,yobserved=0):
+    def __init__(self, G, epsilon, alpha, V, Cinit, tinit, xinit, stepsize, yobserved=0):
         """
         G is the N by N nearest-neighbor graph adjacency matrix
         Cinit is the Dy by N*Dt matrix of initial linear maps
@@ -13,8 +19,8 @@ class LL_LVM:
         degree = np.sum(G,1)
         self.L = np.diag(degree) - G
         self.omega_inv = np.kron(2*self.L, np.identity(self.Dt))
-        self.J = np.kron(np.ones(shape=(self.N,1)),np.identity(self.Dt))
-        self.sigma_x_inv = np.kron(self.epsilon * np.ones(shape=(self.N,1)) * np.ones(shape=(1,self.N)), np.identity(self.Dy)) + np.kron(2*self.L , self.Vinv)
+        self.J = np.kron(np.ones(shape=(self.N,1)), np.identity(self.Dt))
+        self.sigma_x_inv = np.kron(self.epsilon * np.ones(shape=(self.N,1)) * np.ones(shape=(1,self.N)), np.identity(self.Dy)) + np.kron(2*self.L, self.Vinv)
         #self.sigma_x = ln.inv(self.sigma_x_inv)
         
         #add some jitter to condition properly
@@ -29,13 +35,13 @@ class LL_LVM:
         self.tpropcov = np.identity(self.N * self.Dt) * stepsize
         
         #create a dictionary of neighbors
-        self.neighbors = {i:np.where(G[i,:]==1)[0] for i in range(N)}
+        self.neighbors = {i: np.where(G[i,:] == 1)[0] for i in range(self.N)}
         
         #initialize latent variables and observations
         self.C = Cinit; self.t = tinit; self.x = xinit #just put observed if standard LL_LVM
         #list of Dy by Dt numpy arrays for each observation's linear map C_i
         self.Ci = [self.C[:,np.arange(i*self.Dt,(i+1)*self.Dt)] for i in range(self.N)]
-        if yobserved!=0: #for the noisy LL_LVM model
+        if yobserved != 0: #for the noisy LL_LVM model
             self.y = yobserved
         
         #self.e = [-1 * np.sum([self.Vinv * (self.Ci[i] + self.Ci[j])*(self.t[:,i] - self.t[:,j]) for j in self.neighbors[i]]) for i in range(self.N)]
@@ -52,7 +58,7 @@ class LL_LVM:
         self.trace = []; self.likelihoods = []
         
     #calculate likelihood for proposed latent variables
-    def likelihood(self,proposed=False):
+    def likelihood(self, proposed=False):
         
         #x factor changes and y factor added for noisy version **
         
@@ -64,7 +70,7 @@ class LL_LVM:
             Cfactor = matrix_normal_log_star(self.Cprop,np.zeros(shape=(self.Dy, self.N*self.Dt)),np.identity(self.Dy),self.C_priorcov)
             tfactor = matrix_normal_log_star(self.tprop,np.zeros(self.Dt),np.identity(self.Dt),self.t_priorcov)
             mu_x = np.matrix(self.sigma_x) * self.eprop.reshape((self.N*self.Dy,1))
-            xfactor = scipy.stats.multivariate_normal.logpdf(self.x.reshape((self.N*self.Dy,1)).T,mean= list(mu_x.flat),cov=self.sigma_x)
+            xfactor = mvn.logpdf(self.x.reshape((self.N*self.Dy,1)).T,mean= list(mu_x.flat),cov=self.sigma_x)
             #print Cfactor, tfactor, xfactor
             return Cfactor + tfactor + xfactor
             
@@ -75,7 +81,7 @@ class LL_LVM:
             Cfactor = matrix_normal_log_star(self.C,np.zeros(shape=(self.Dy, self.N*self.Dt)),np.identity(self.Dy),self.C_priorcov)
             tfactor = matrix_normal_log_star(self.t,np.zeros(self.Dt),np.identity(self.Dt),self.t_priorcov)
             mu_x = np.matrix(self.sigma_x) * self.e.reshape((self.N*self.Dy,1))
-            xfactor = scipy.stats.multivariate_normal.logpdf(self.x.reshape((self.N*self.Dy,1)).T,mean= list(mu_x.flat),cov=self.sigma_x)
+            xfactor = mvn.logpdf(self.x.reshape((self.N*self.Dy,1)).T,mean= list(mu_x.flat),cov=self.sigma_x)
             #print Cfactor, tfactor, xfactor
             return Cfactor + tfactor + xfactor
     
@@ -108,7 +114,7 @@ class LL_LVM:
 
         #add proposal for x here for noisy version**
 
-    def MH_step(self,burn_in=False):
+    def MH_step(self, burn_in=False):
         #propose
         self.propose()
         #update

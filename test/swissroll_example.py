@@ -1,4 +1,10 @@
-data = datasets.make_swiss_roll(400,.01)
+from sklearn import datasets, neighbors, preprocessing
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from lllvm import LL_LVM
+
+data = datasets.make_swiss_roll(300, 0.01)
 #x = preprocessing.normalize(data[0])
 x = data[0] / np.sum(data[0],0)
 x = x.T
@@ -12,11 +18,11 @@ ax.scatter(x[0,:], x[1,:], x[2,:], c=t_true, marker='o')
 plt.show()
 
 #tinit = np.random.multivariate_normal([0] * Dt * N, np.identity(Dt * N)*.25).reshape((1,N))
-tinit = np.random.uniform(-1.5,1.5,size=Dt * N).reshape((Dt,N))
-Cinit = np.random.multivariate_normal([0] * Dt * N * Dy, np.identity(Dt * N * Dy)*.25).reshape(Dy,Dt*N)
+tinit = np.random.uniform(-1.5, 1.5, size=Dt * N).reshape((Dt,N))
+Cinit = np.random.multivariate_normal([0] * Dt * N * Dy, np.identity(Dt * N * Dy)*0.25).reshape(Dy,Dt*N)
 
 #build nearest neighbor graph
-G = neighbors.kneighbors_graph(x.T,9).toarray()
+G = neighbors.kneighbors_graph(x.T, 9).toarray()
 G = ((G + G.T) > 0) * 1.0
 
 #set user-defined parameters
@@ -43,10 +49,10 @@ model = LL_LVM(G,epsilon,alpha,V,Cinit,tinit,x,.0005)
 #model.likelihood(proposed=True)
 
 for i in range(1000):
-    print i
+    print(i)
     model.MH_step(burn_in=True)
 for i in range(3000):
-    print i
+    print(i)
     model.MH_step(burn_in=False)
 
 acceptance_rate = model.acceptance / 4000.0
