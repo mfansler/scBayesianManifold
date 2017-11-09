@@ -1,7 +1,6 @@
 from .utils import chol_inv, matrix_normal_log_star, matrix_normal_log_star2
 import numpy as np
 import numpy.linalg as ln
-from scipy.stats import multivariate_normal as mvn
 from scipy.stats import bernoulli
 from scipy.sparse.csgraph import laplacian
 from scipy.sparse import kron, eye
@@ -25,7 +24,7 @@ class LL_LVM:
         self.Dt = tinit.shape[0]
 
         # constants
-        self.alpha, self.epsilon = alpha, epsilon
+        self.alpha, self.epsilon, self.stepsize = alpha, epsilon, stepsize
 
         self.V = V
         self.Vinv = chol_inv(V)
@@ -67,11 +66,18 @@ class LL_LVM:
         self.Cfinal = np.zeros(shape=(self.Dy, self.N*self.Dt))
         self.tfinal = np.zeros(shape=(self.Dt, self.N))
 
+        # cache (x * Sig_x * x)
+        self.x_SigX_x = self.x.reshape((1, self.N*self.Dy)).dot(self.sigma_x_inv.dot(self.x.reshape((self.N*self.Dy, 1))))
+
         self.acceptance = 0
         
         # initialize variables to store trace and likelihood
         self.trace, self.likelihoods = [], []
-        
+
+    def _loglik_x_star(self, e):
+        return -0.5*(self.x_SigX_x - 2*self.x.reshape((1, self.N*self.Dy)).dot(e)
+                     + e.T.dot(self.sigma_x.dot(e)))[0]
+
     # calculate likelihood for proposed latent variables
     def likelihood(self, proposed=False):
         
@@ -82,8 +88,9 @@ class LL_LVM:
             # calculate likelihood under proposed value
             Cfactor = matrix_normal_log_star2(self.Cprop, np.zeros(shape=(self.Dy, self.N*self.Dt)), eye(self.Dy), self.C_priorprc)
             tfactor = matrix_normal_log_star2(self.tprop, np.zeros(self.Dt), eye(self.Dt), self.t_priorprc)
-            mu_x = np.matrix(self.sigma_x) * self.eprop.reshape((self.N*self.Dy, 1))
-            xfactor = mvn.logpdf(self.x.reshape((self.N*self.Dy,1)).T, mean=list(mu_x.flat), cov=self.sigma_x)
+            #mu_x = np.matrix(self.sigma_x) * self.eprop.reshape((self.N*self.Dy, 1))
+            #xfactor = mvn.logpdf(self.x.reshape((self.N*self.Dy,1)).T, mean=list(mu_x.flat), cov=self.sigma_x, allow_singular=True)
+            xfactor = self._loglik_x_star(self.eprop.reshape((self.N*self.Dy, 1)))
             #print(Cfactor, tfactor, xfactor)
             return Cfactor + tfactor + xfactor
             
@@ -91,8 +98,9 @@ class LL_LVM:
             # if proposed is false just calculate it under the current variables
             Cfactor = matrix_normal_log_star2(self.C, np.zeros(shape=(self.Dy, self.N*self.Dt)), eye(self.Dy), self.C_priorprc)
             tfactor = matrix_normal_log_star2(self.t, np.zeros(self.Dt), eye(self.Dt), self.t_priorprc)
-            mu_x = np.matrix(self.sigma_x) * self.e.reshape((self.N*self.Dy, 1))
-            xfactor = mvn.logpdf(self.x.reshape((self.N*self.Dy, 1)).T, mean=list(mu_x.flat), cov=self.sigma_x)
+            #mu_x = np.matrix(self.sigma_x) * self.e.reshape((self.N*self.Dy, 1))
+            #xfactor = mvn.logpdf(self.x.reshape((self.N*self.Dy, 1)).T, mean=list(mu_x.flat), cov=self.sigma_x, allow_singular=True)
+            xfactor = self._loglik_x_star(self.e.reshape((self.N * self.Dy, 1)))
             #print(Cfactor, tfactor, xfactor)
             return Cfactor + tfactor + xfactor
     
@@ -116,11 +124,14 @@ class LL_LVM:
     
     #propose a new value based on current values
     def propose(self):
-        #drawn from MVN centered at C
-        self.Cprop = np.random.multivariate_normal(self.C.reshape((self.Dy*self.Dt*self.N)),self.Cpropcov).reshape((self.Dy,self.Dt*self.N))
-        self.Ciprop = [self.Cprop[:,np.arange(i*self.Dt,(i+1)*self.Dt)] for i in range(self.N)]
+        # drawn from MVN centered at C
+        self.Cprop = self.C + np.random.randn(self.Dy, self.Dt*self.N)*self.stepsize
+
+        self.Ciprop = [self.Cprop[:, np.arange(i*self.Dt, (i+1)*self.Dt)] for i in range(self.N)]
+
         #drawn from MVN centered at t
-        self.tprop = np.random.multivariate_normal(self.t.reshape((self.Dt*self.N)),self.tpropcov).reshape((self.Dt,self.N))
+        self.tprop = self.t + np.random.randn(self.Dt, self.N)*self.stepsize
+
         self.eprop = np.array([-1 * np.array([self.Vinv * np.matrix((self.Ciprop[i] + self.Ciprop[j]))*np.matrix((self.tprop[:,i] - self.tprop[:,j])) for j in self.neighbors[i]]).sum(0) for i in range(self.N)]).flatten()
 
         #add proposal for x here for noisy version**
@@ -135,4 +146,3 @@ class LL_LVM:
         if not burn_in:
             self.Cfinal = self.Cfinal + self.C
             self.tfinal = self.tfinal + self.t
-

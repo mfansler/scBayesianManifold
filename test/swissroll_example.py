@@ -49,10 +49,10 @@ model = LL_LVM(G,epsilon,alpha,V,Cinit,tinit,x,.0005)
 #model.propose()
 #model.likelihood(proposed=True)
 
-for i in range(10):
+for i in range(100):
     print(i)
     model.MH_step(burn_in=True)
-for i in range(30):
+for i in range(300):
     print(i)
     model.MH_step(burn_in=False)
 
