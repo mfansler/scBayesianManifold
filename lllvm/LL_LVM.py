@@ -58,7 +58,7 @@ class LL_LVM:
         if yobserved != 0:  # for the noisy LL_LVM model
             self.y = yobserved
         
-        self.e = self._e(self._C, self.t)
+        self.e = self._e(self.C.reshape(self.Dy, self.N, self.Dt), self.t)
 
         # final means
         self.C_mean = Cinit
@@ -70,19 +70,13 @@ class LL_LVM:
         # counts
         self.num_samples, self.accept_rate = 0, 0
 
-        self.Cprop, self.tprop, self.eprop = self.C, self.t, self._e(self._C, self.t)
+        self.Cprop, self.tprop, self.eprop = self.C, self.t, self.e
 
         # initialize variables to store trace and likelihood
         self.trace, self.likelihoods = [], [self.likelihood()]
 
-    def _C(self, i):
-        return self.C[:, np.arange(i*self.Dt, (i+1)*self.Dt)]
-
-    def _C_prop(self, i):
-        return self.Cprop[:, np.arange(i*self.Dt, (i+1)*self.Dt)]
-
     def _e(self, C, t):
-        return np.array([-1 * np.array([self.Vinv.dot(C(i) + C(j)).dot(t[:,i] - t[:,j]) for j in self.neighbors[i]]).sum(0) for i in range(self.N)]).flatten()
+        return np.array([-1 * np.array([self.Vinv.dot(C[:,i,:] + C[:,j,:]).dot(t[:,i] - t[:,j]) for j in self.neighbors[i]]).sum(0) for i in range(self.N)]).flatten()
 
     def _loglik_x_star(self, e):
         return -0.5*(self.x_SigX_x - 2*self.x.reshape((1, self.N*self.Dy)).dot(e)
@@ -114,7 +108,7 @@ class LL_LVM:
         if accept:
             self.C = np.copy(self.Cprop)
             self.t = np.copy(self.tprop)
-            self.e = self._e(self._C, self.t)
+            self.e = np.copy(self.eprop)
             self.likelihoods.append(Lprime)
 
             # ToDo: add acceptance for x here for noisy version
@@ -128,7 +122,7 @@ class LL_LVM:
     def propose(self):
         self.Cprop = self.C + np.random.randn(self.Dy, self.N*self.Dt)*self.stepsize
         self.tprop = self.t + np.random.randn(self.Dt, self.N)*self.stepsize
-        self.eprop = self._e(self._C_prop, self.tprop)
+        self.eprop = self._e(self.Cprop.reshape(self.Dy, self.N, self.Dt), self.tprop)
 
         # ToDo: add proposal for x here for noisy version
 
