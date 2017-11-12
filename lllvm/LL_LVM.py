@@ -1,4 +1,4 @@
-from .utils import chol_inv, matrix_normal_log_star, matrix_normal_log_star2
+from .utils import chol_inv, matrix_normal_log_star_std, matrix_normal_log_star2
 import numpy as np
 import numpy.linalg as ln
 from scipy.stats import bernoulli
@@ -64,6 +64,7 @@ class LL_LVM:
         self.C_mean = Cinit
         self.t_mean = tinit
 
+        # ToDo: Eliminate unnecessary reshaping
         # cache (x * Sig_x * x)
         self.x_SigX_x = self.x.reshape((1, self.N*self.Dy)).dot(self.sigma_x_inv.dot(self.x.reshape((self.N*self.Dy, 1))))
 
@@ -76,9 +77,22 @@ class LL_LVM:
         self.trace, self.likelihoods = [], [self.likelihood()]
 
     def _e(self, C, t):
-        return np.array([-1 * np.array([self.Vinv.dot(C[:,i,:] + C[:,j,:]).dot(t[:,i] - t[:,j]) for j in self.neighbors[i]]).sum(0) for i in range(self.N)]).flatten()
+
+        # precompute differences in t
+        # NB: t[:,i] - t[:,j] = t_diff[i, :, j]
+        t_diff = np.kron(np.ones((self.N, 1)), t).reshape(self.N, self.Dt, self.N)
+        t_diff = t_diff - t_diff.transpose()
+
+        # ToDo: Parallelize this loop
+        e = np.empty((self.Dy, self.N))
+        for i in range(self.N):
+            e[:, i] = np.sum((C[:,i,:] + C[:,j,:]).dot(t_diff[i, :, j]) for j in self.neighbors[i])
+        e = - self.Vinv.dot(e)
+
+        return e.flatten(order='F')
 
     def _loglik_x_star(self, e):
+        # ToDo: eliminate reshaping
         return -0.5*(self.x_SigX_x - 2*self.x.reshape((1, self.N*self.Dy)).dot(e)
                      + e.T.dot(self.sigma_x.dot(e)))[0]
 
@@ -87,9 +101,8 @@ class LL_LVM:
         
         C, t, e = self.Cprop, self.tprop, self.eprop
 
-        Cfactor = matrix_normal_log_star2(C, np.zeros(shape=(self.Dy, self.N*self.Dt)),
-                                          eye(self.Dy), self.C_priorprc)
-        tfactor = matrix_normal_log_star2(t, np.zeros(self.Dt), eye(self.Dt), self.t_priorprc)
+        Cfactor = matrix_normal_log_star_std(C, self.C_priorprc)
+        tfactor = matrix_normal_log_star_std(t, self.t_priorprc)
         xfactor = self._loglik_x_star(e.reshape((self.N * self.Dy, 1)))
 
         # print(Cfactor, tfactor, xfactor)

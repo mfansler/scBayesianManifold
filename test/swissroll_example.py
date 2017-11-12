@@ -4,7 +4,7 @@ import numpy as np
 #from mpl_toolkits.mplot3d import Axes3D
 from lllvm import LL_LVM
 
-data = datasets.make_swiss_roll(300, 0.01)
+data = datasets.make_swiss_roll(500, 0.01)
 #x = preprocessing.normalize(data[0])
 x = data[0] / np.sum(data[0],0)
 x = x.T
