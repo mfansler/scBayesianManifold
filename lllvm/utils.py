@@ -26,6 +26,10 @@ def matrix_normal_log_star2(A, M, U_inv, V_inv):
     return -.5 * np.trace(V_inv.dot(R.T.dot(U_inv.dot(R))))
 
 
+def matrix_normal_log_star_std(A, V_inv):
+    return -.5 * np.trace(V_inv.dot(A.T).dot(A))
+
+
 def chol_inv(X):
     L = ln.cholesky(X)
     Linv = solve_triangular(L, np.identity(L.shape[0]), lower=True)
@@ -66,5 +70,15 @@ if __name__ == '__main__':
 
     #print(timeit("matrix_normal_log_star(A, M, U, V)", number=100, globals=globals()))
     #print(timeit("matrix_normal_log_star2(A, M, U, V)", number=100, globals=globals()))
+
+    # Test matrix_normal_log_star_std
+    stepsize = 0.01
+    A2 = np.random.randn(3, n)
+    M2 = np.zeros_like(A2)
+    U_inv2 = np.eye(3)
+
+    llA2_1 = matrix_normal_log_star2(A2, M2, U_inv2, V_inv)
+    llA2_2 = matrix_normal_log_star_std(A2, V_inv)
+    assert np.isclose(llA2_1, llA2_2)
 
     print("All tests passed!")
