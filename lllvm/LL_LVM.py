@@ -6,7 +6,7 @@ from scipy.sparse.csgraph import laplacian
 from scipy.sparse import kron, eye
 from scipy.sparse.linalg import inv as sp_inv
 from scipy.linalg import inv
-
+import scipy.stats
 
 class LL_LVM:
     def __init__(self, G, epsilon, alpha, V, Cinit, tinit, xinit, stepsize, yobserved=0):
@@ -32,7 +32,7 @@ class LL_LVM:
 
         # graph laplacian
         self.L = laplacian(G)
-
+        
         # precision matrices
         self.omega_inv = kron(2*self.L, eye(self.Dt))
         self.sigma_x_inv = kron(np.full((self.N, self.N), self.epsilon), eye(self.Dy)) + kron(2*self.L, self.Vinv)
@@ -44,19 +44,13 @@ class LL_LVM:
         self.t_priorprc = self.alpha*eye(self.N) + 2*self.L
         self.C_priorprc = epsilon*self.J.dot(self.J.T) + self.omega_inv
 
-        self.Cpropcov = eye(self.N * self.Dy * self.Dt) * stepsize
-        self.tpropcov = eye(self.N * self.Dt) * stepsize
-        
         # create a dictionary of neighbors
         self.neighbors = G.tolil().rows
 
         # initialize latent variables and observations
         # just put observed if standard LL_LVM
         self.C, self.t, self.x = Cinit, tinit, xinit
-
-        # list of Dy by Dt numpy arrays for each observation's linear map C_i
-        if yobserved != 0:  # for the noisy LL_LVM model
-            self.y = yobserved
+        self.xvec = self.x.reshape((self.N*self.Dy, 1), order="F")
         
         self.e = self._e(self.C.reshape(self.Dy, self.N, self.Dt), self.t)
 
@@ -66,7 +60,7 @@ class LL_LVM:
 
         # ToDo: Eliminate unnecessary reshaping
         # cache (x * Sig_x * x)
-        self.x_SigX_x = self.x.reshape((1, self.N*self.Dy)).dot(self.sigma_x_inv.dot(self.x.reshape((self.N*self.Dy, 1))))
+        self.x_SigX_x = self.xvec.T.dot(self.sigma_x_inv.dot(self.xvec))
 
         # counts
         self.num_samples, self.accept_rate = 0, 0
@@ -75,7 +69,9 @@ class LL_LVM:
 
         # initialize variables to store trace and likelihood
         self.trace, self.likelihoods = [], [self.likelihood()]
-
+        
+        self.Pi = kron(chol_inv(self.alpha * np.eye(self.N) + 2*self.L) , np.eye(self.Dt))
+        self.C_priorcov = chol_inv(self.C_priorprc.todense())
     def _e(self, C, t):
 
         # precompute differences in t
@@ -89,13 +85,16 @@ class LL_LVM:
             e[:, i] = np.sum((C[:,i,:] + C[:,j,:]).dot(t_diff[i, :, j]) for j in self.neighbors[i])
         e = - self.Vinv.dot(e)
 
-        return e.flatten(order='F')
+        return e.flatten(order='F')#.reshape((self.N*self.Dy, 1),order="F")
 
     def _loglik_x_star(self, e):
         # ToDo: eliminate reshaping
-        return -0.5*(self.x_SigX_x - 2*self.x.reshape((1, self.N*self.Dy)).dot(e)
-                     + e.T.dot(self.sigma_x.dot(e)))[0]
+        return -.5 * (self.x_SigX_x - 2*self.xvec.T.dot(e) + e.T.dot(self.sigma_x.dot(e)))[0]
 
+    def _log_MV_normal(self,x,mu,prc):
+        x, mu, prc = np.matrix(x), np.matrix(mu).T, np.matrix(prc)
+        return float(-.5 *  (x-mu).T * chol_inv(prc) * (x-mu))
+    
     # calculate likelihood for proposed latent variables
     def likelihood(self):
         
@@ -103,10 +102,49 @@ class LL_LVM:
 
         Cfactor = matrix_normal_log_star_std(C, self.C_priorprc)
         tfactor = matrix_normal_log_star_std(t, self.t_priorprc)
-        xfactor = self._loglik_x_star(e.reshape((self.N * self.Dy, 1)))
+        xfactor = self._loglik_x_star(e)
 
         # print(Cfactor, tfactor, xfactor)
+        return (Cfactor + tfactor + xfactor)[0]
+        
+    def likelihood2(self):
+        
+        C, t, e = self.Cprop, self.tprop, self.eprop
+        
+        tfactor = self._log_MV_normal(t.reshape((self.Dt*self.N,1),order='F'),
+            np.zeros(self.Dt*self.N),
+            self.Pi.todense())
+        
+        Cfactor = self._log_MV_normal(C.reshape((self.Dy*self.Dt*self.N,1),order='F'),
+            np.zeros(shape=(self.Dy*self.N*self.Dt)),
+            kron(self.C_priorcov,np.eye(self.Dy)).todense())
+        
+        mu_x = np.matrix(self.sigma_x) * np.matrix(e).T
+        
+        xfactor = self._log_MV_normal(self.xvec,
+            np.array(mu_x)[:,0], 
+            self.sigma_x)
+        
         return Cfactor + tfactor + xfactor
+        
+    def likelihood3(self):
+        
+        C, t, e = self.Cprop, self.tprop, self.eprop
+        
+        tfactor = scipy.stats.multivariate_normal.logpdf(t.reshape((self.Dt*self.N,1),order='F'),
+            np.zeros(self.Dt*self.N),
+            self.Pi.todense())
+        
+        Cfactor = scipy.stats.multivariate_normal.logpdf(C.reshape((self.Dy*self.Dt*self.N,1),order='F'),
+            np.zeros(shape=(self.Dy*self.N*self.Dt)),
+            kron(self.C_priorcov,np.eye(self.Dy)).todense())
+        
+        mu_x = np.matrix(self.sigma_x) * np.matrix(e).T
+        
+        xfactor = scipy.stats.multivariate_normal.logpdf(self.xvec,
+            np.array(mu_x)[:,0], 
+            self.sigma_x)
+        return Cfactor[0] + tfactor[0] + xfactor[0]
     
     # update with Metropolis-Hastings step
     def update(self):
@@ -142,8 +180,23 @@ class LL_LVM:
     def MH_step(self, burn_in=False):
         self.propose()
         accept = self.update()
+        self.trace.append(self.t[0,0])
         if not burn_in:
             self.num_samples += 1
             self.accept_rate = ((self.num_samples - 1)*self.accept_rate + accept)/self.num_samples
-            self.C_mean = ((self.num_samples - 1)*self.C_mean + self.C)/self.num_samples
-            self.t_mean = ((self.num_samples - 1)*self.t_mean + self.t)/self.num_samples
+            self.C_mean = ((self.num_samples - 1)*self.C_mean + self.C)/float(self.num_samples)
+            self.t_mean = ((self.num_samples - 1)*self.t_mean + self.t)/float(self.num_samples)
+    
+    def autocorrelation(self,maxlag):
+        trace = np.array(self.trace)[np.arange(self.num_samples,len(self.trace))]
+        return [np.corrcoef(trace[0:len(trace)-i], trace[i:len(trace)])[0,1] for i in np.arange(1,maxlag)]
+        
+    def simulate(self):
+        Pi = kron(chol_inv(self.alpha * np.eye(self.N) + 2*self.L) , np.eye(self.Dt))
+        C_priorcov = chol_inv(self.C_priorprc.todense())
+        t = np.random.multivariate_normal(np.zeros(self.Dt*self.N),Pi.todense()).reshape((self.Dt,self.N),order='F')
+        C = np.random.multivariate_normal(np.zeros(shape=(self.Dy*self.N*self.Dt)),kron(C_priorcov,np.eye(self.Dy)).todense()).reshape((self.Dy,self.Dt*self.N),order='F')
+        e = self._e(C.reshape(self.Dy, self.N, self.Dt), t)
+        mu_x = np.matrix(self.sigma_x) * np.matrix(e).T
+        x = np.random.multivariate_normal(mean=np.array(mu_x)[:,0], cov=self.sigma_x).reshape((self.Dy,self.N),order="F")
+        return x, t, C
