@@ -95,7 +95,7 @@ class scLL_LVM2:
         discrete = np.floor(np.exp(x))
         diff = x - self.y
         if np.alltrue(diff > 0):
-            return self.ld * np.sum(diff)
+            return -1 * self.ld * np.sum(diff)
         else:
             return -1 * float('inf')
         
@@ -140,13 +140,14 @@ class scLL_LVM2:
         self.Cprop = self.C + np.random.randn(self.Dy, self.N*self.Dt)*self.stepsize
         self.tprop = self.t + np.random.randn(self.Dt, self.N)*self.stepsize
         self.eprop = self._e(self.Cprop.reshape(self.Dy, self.N, self.Dt), self.tprop)
-        self.xprop = self.x + np.random.randn(self.Dy, self.N)*self.stepsize
+        self.xprop = self.x + np.random.randn(self.Dy* self.N, 1)*self.stepsize
         self.x_SigX_x = self.xprop.T.dot(self.sigma_x.dot(self.xprop))
         
     def MH_step(self, burn_in=False):
         self.propose()
         accept = self.update()
         self.trace.append(self.t[0,0])
+        
         if not burn_in:
             self.num_samples += 1
             self.accept_rate = ((self.num_samples - 1)*self.accept_rate + accept)/self.num_samples
@@ -166,8 +167,9 @@ class scLL_LVM2:
         e = self._e(C.reshape(self.Dy, self.N, self.Dt), t)
         mu_x = np.matrix(self.sigma_x) * np.matrix(e).T
         x = np.random.multivariate_normal(mean=np.array(mu_x)[:,0], cov=self.sigma_x)
-        x1 = np.floor(np.exp(x * 10))
+        x = 5.0 + (x - np.mean(x)) * (2.0 / np.std(x))
+        x1 = np.floor(np.exp(x))
         h = [np.random.binomial(int(xi),self.ld) for xi in x1]
         y = x1 - np.array(h)
         y = y.reshape((self.Dy,self.N),order="F")
-        return x.reshape((self.Dy,self.N),order="F"), y, t, C
+        return x.reshape((self.Dy,self.N),order="F"), np.log(y + .1), t, C
