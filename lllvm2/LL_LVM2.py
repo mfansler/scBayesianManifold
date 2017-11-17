@@ -63,7 +63,7 @@ class LL_LVM2:
         self.x_SigX_x = self.xvec.T.dot(self.sigma_x_inv.dot(self.xvec))
 
         # counts
-        self.num_samples, self.accept_rate = 0, 0
+        self.num_samples, self.accept_rate, self.num_samples_tot = 0, 0, 0
 
         self.Cprop, self.tprop, self.eprop = self.C, self.t, self.e
 
@@ -114,6 +114,7 @@ class LL_LVM2:
         L = self.likelihoods[-1]
         # calculate acceptance probability
         a = 1.0 if Lprime > L else np.exp(Lprime - L)
+        #print(a)
         accept = bernoulli.rvs(a)
         
         # update the variables
@@ -152,14 +153,18 @@ class LL_LVM2:
         for i in range(self.Dt * self.N):
             self.propose(i,'t')
             accept = self.update()
+            self.num_samples_tot +=1
+            self.accept_rate = ((self.num_samples_tot - 1)*self.accept_rate + accept)/float(self.num_samples_tot)
         for i in range(self.Dy*self.N*self.Dt):
             self.propose(i,'C')
             accept = self.update()
-        
+            self.num_samples_tot +=1
+            self.accept_rate = ((self.num_samples_tot - 1)*self.accept_rate + accept)/float(self.num_samples_tot)
         self.trace.append(self.t[0,0])
+        
         if not burn_in:
             self.num_samples += 1
-            self.accept_rate = ((self.num_samples - 1)*self.accept_rate + accept)/self.num_samples
+            #self.accept_rate = ((self.num_samples - 1)*self.accept_rate + accept)/self.num_samples
             self.C_mean = ((self.num_samples - 1)*self.C_mean + self.C)/float(self.num_samples)
             self.t_mean = ((self.num_samples - 1)*self.t_mean + self.t)/float(self.num_samples)
     

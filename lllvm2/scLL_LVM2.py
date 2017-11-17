@@ -9,7 +9,7 @@ from scipy.linalg import inv
 import scipy.stats
 
 class scLL_LVM2:
-    def __init__(self, G, epsilon, alpha, V, Cinit, tinit, xinit, yobserved, stepsize, ld):
+    def __init__(self, G, epsilon, alpha, V, Cinit, tinit, xinit, yobserved, stepsize, stepsize_x,  ld):
         """
         G is the N by N nearest-neighbor graph adjacency matrix
         Cinit is the Dy by N*Dt matrix of initial linear maps
@@ -24,7 +24,7 @@ class scLL_LVM2:
         self.Dt = tinit.shape[0]
 
         # constants
-        self.alpha, self.epsilon, self.ld, self.stepsize = alpha, epsilon, ld, stepsize
+        self.alpha, self.epsilon, self.ld, self.stepsize, self.stepsize_x = alpha, epsilon, ld, stepsize, stepsize_x
 
         self.V = V
         self.Vinv = chol_inv(V)
@@ -50,24 +50,35 @@ class scLL_LVM2:
         #latent and observed variables
         self.C, self.t = Cinit, tinit
         self.e = self._e(self.C.reshape(self.Dy, self.N, self.Dt), self.t)
-        self.x = xinit.reshape((self.N*self.Dy,1), order = 'F')
-        self.y = yobserved.reshape((self.N*self.Dy,1), order='F')
+        yflat = yobserved.reshape((self.N*self.Dy,1), order='F')
+        self.dropouts = np.where(yflat==0)[0] #indexing as in the mu_x vector
+        self.observed = np.where(yflat!=0)[0] #indexing as in the mu_x vector
+        self.Nobserved = len(self.observed); self.N0 = self.N - self.Nobserved
+        xflat = xinit.reshape((self.N*self.Dy,1), order = 'F')
+        self.x0 = xflat[self.dropouts]
+        self.yobserved = yflat[self.observed]
+        self.sigma_x0 = self.sigma_x[self.dropouts,:][:,self.dropouts]
+        self.sigma_xobserved = self.sigma_x[self.observed,:][:,self.observed]
+        self.sigma_x_inv0 = self.sigma_x_inv[self.dropouts,:][:,self.dropouts]
+        self.sigma_x_invobserved = self.sigma_x_inv[self.observed,:][:,self.observed]
 
         # final means
-        self.C_mean = Cinit
-        self.t_mean = tinit
-        self.x_mean = self.x
-        
+        self.C_mean = np.zeros(Cinit.shape)
+        self.t_mean = np.zeros(tinit.shape)
+        self.x0_mean = np.zeros(self.x0.shape)
+
         #this needs to be recomputed every time
-        self.x_SigX_x = self.x.T.dot(self.sigma_x_inv.dot(self.x))
+        self.x_SigX_x0 = self.x0.T.dot(self.sigma_x_inv0.dot(self.x0))
+        # cache (x * Sig_x * x)
+        self.x_SigX_xobserved = self.yobserved.T.dot(self.sigma_x_invobserved.dot(self.yobserved))
         
         # counts
-        self.num_samples, self.accept_rate = 0, 0
+        self.num_samples, self.num_samples_tot, self.accept_rate = 0, 0, 0
 
-        self.Cprop, self.tprop, self.eprop, self.xprop = self.C, self.t, self.e, self.x
+        self.Cprop, self.tprop, self.eprop, self.x0prop = self.C, self.t, self.e, self.x0
 
         # initialize variables to store trace and likelihood
-        self.trace, self.likelihoods = [], [self.likelihood()]
+        self.trace, self.trace_x, self.likelihoods = [], [], [self.likelihood()]
         
         self.Pi = kron(chol_inv(self.alpha * np.eye(self.N) + 2*self.L) , np.eye(self.Dt))
         self.C_priorcov = chol_inv(self.C_priorprc.todense())
@@ -87,30 +98,28 @@ class scLL_LVM2:
 
         return e.flatten(order='F')#.reshape((self.N*self.Dy, 1),order="F")
 
-    def _loglik_x_star(self, e, x):
-        return -.5 * (self.x_SigX_x - 2*x.T.dot(e) + 
-            e.T.dot(self.sigma_x.dot(e)))[0]
+    def _loglik_xobserved_star(self, e):
+        return -.5 * (self.x_SigX_xobserved - 2*self.yobserved.T.dot(e) + 
+            e.T.dot(self.sigma_xobserved.dot(e)))[0]
 
-    def _loglik_dropouts(self, x):
-        discrete = np.floor(np.exp(x))
-        diff = x - self.y
-        if np.alltrue(diff > 0):
-            return -1 * self.ld * np.sum(diff)
-        else:
-            return -1 * float('inf')
-        
+    def _loglik_x0_star(self, e, x0):
+        return -.5 * (self.x_SigX_x0 - 2*x0.T.dot(e) + e.T.dot(self.sigma_x0.dot(e)))[0]
+    
     # calculate likelihood for proposed latent variables
     def likelihood(self):
         
-        C, t, e, x = self.Cprop, self.tprop, self.eprop, self.xprop
+        C, t, e, x0 = self.Cprop, self.tprop, self.eprop, self.x0prop
 
         Cfactor = matrix_normal_log_star_std(C, self.C_priorprc)
         tfactor = matrix_normal_log_star_std(t, self.t_priorprc)
-        xfactor = self._loglik_x_star(e,x)
-        dropouts = self._loglik_dropouts(x)
-
+        xfactorobserved = self._loglik_xobserved_star(e[self.observed])
+        xfactor0 = self._loglik_x0_star(e[self.dropouts],x0)
+        #dropouts = np.sum(np.exp(self.x0prop)) * self.ld * -1
         # print(Cfactor, tfactor, xfactor)
-        return (Cfactor + tfactor + xfactor + dropouts)[0]
+        return (Cfactor + tfactor + xfactorobserved + xfactor0)[0]
+    
+    def set_stepsize(self,new_step):
+        self.stepsize = new_step
     
     # update with Metropolis-Hastings step
     def update(self):
@@ -119,6 +128,7 @@ class scLL_LVM2:
         L = self.likelihoods[-1]
         # calculate acceptance probability
         a = 1.0 if Lprime > L else np.exp(Lprime - L)
+        print(Lprime - L, Lprime, L)
         accept = bernoulli.rvs(a)
         
         # update the variables
@@ -126,7 +136,7 @@ class scLL_LVM2:
             self.C = np.copy(self.Cprop)
             self.t = np.copy(self.tprop)
             self.e = np.copy(self.eprop)
-            self.x = np.copy(self.xprop)
+            self.x0 = np.copy(self.x0prop)
             self.likelihoods.append(Lprime)
             # ToDo: add acceptance for x here for noisy version
 
@@ -136,25 +146,53 @@ class scLL_LVM2:
         return accept
 
     # propose a new value based on current values
-    def propose(self):
-        self.Cprop = self.C + np.random.randn(self.Dy, self.N*self.Dt)*self.stepsize
-        self.tprop = self.t + np.random.randn(self.Dt, self.N)*self.stepsize
-        self.eprop = self._e(self.Cprop.reshape(self.Dy, self.N, self.Dt), self.tprop)
-        self.xprop = self.x + np.random.randn(self.Dy* self.N, 1)*self.stepsize
-        self.x_SigX_x = self.xprop.T.dot(self.sigma_x.dot(self.xprop))
-        
+    def propose(self, i, var):
+        draw = float(np.random.randn(1))
+        if var == "C":
+            vec = np.zeros(self.Dy*self.N*self.Dt)
+            vec[i] = draw
+            vec = vec.reshape((self.Dy, self.N*self.Dt),order='F')
+            self.Cprop = self.C +vec*self.stepsize
+            self.eprop = self._e(self.Cprop.reshape(self.Dy, self.N, self.Dt), self.tprop)
+        if var == "t":
+            vec = np.zeros(self.Dt * self.N)
+            vec[i] = draw
+            vec = vec.reshape((self.Dt, self.N),order="F")
+            self.tprop = self.t + vec*self.stepsize
+            self.eprop = self._e(self.Cprop.reshape(self.Dy, self.N, self.Dt), self.tprop)
+        if var == 'x':
+            vec = np.zeros(self.x0.shape)
+            vec[i] = draw
+            self.x0prop = self.x0prop + vec*self.stepsize_x
+            self.x_SigX_x0 = self.x0prop.T.dot(self.sigma_x_inv0.dot(self.x0prop))
+            
     def MH_step(self, burn_in=False):
-        self.propose()
-        accept = self.update()
-        self.trace.append(self.t[0,0])
-        
+        for i in range(self.Dt * self.N):
+            self.propose(i,'t')
+            accept = self.update()
+            self.num_samples_tot +=1
+            self.accept_rate = ((self.num_samples_tot - 1)*self.accept_rate + accept)/float(self.num_samples_tot)
+        for i in range(self.Dy*self.N*self.Dt):
+            self.propose(i,'C')
+            accept = self.update()
+            self.num_samples_tot +=1
+            self.accept_rate = ((self.num_samples_tot - 1)*self.accept_rate + accept)/float(self.num_samples_tot)    
+        for i in range(len(self.dropouts)):
+            self.propose(i,'x')
+            accept = self.update()
+            self.num_samples_tot +=1
+            self.accept_rate = ((self.num_samples_tot - 1)*self.accept_rate + accept)/float(self.num_samples_tot)    
+            
+        self.trace_x.append(self.x0[0,0])
+        self.num_samples_tot +=1
+        self.accept_rate = ((self.num_samples_tot - 1)*self.accept_rate + accept)/float(self.num_samples_tot)
         if not burn_in:
             self.num_samples += 1
-            self.accept_rate = ((self.num_samples - 1)*self.accept_rate + accept)/self.num_samples
+            #self.accept_rate = ((self.num_samples - 1)*self.accept_rate + accept)/self.num_samples
             self.C_mean = ((self.num_samples - 1)*self.C_mean + self.C)/float(self.num_samples)
             self.t_mean = ((self.num_samples - 1)*self.t_mean + self.t)/float(self.num_samples)
-            self.x_mean = ((self.num_samples - 1)*self.x_mean + self.x)/float(self.num_samples)
-    
+            self.x0_mean = ((self.num_samples - 1)*self.x0_mean + self.x0)/float(self.num_samples)
+
     def autocorrelation(self,maxlag):
         trace = np.array(self.trace)[np.arange(self.num_samples,len(self.trace))]
         return [np.corrcoef(trace[0:len(trace)-i], trace[i:len(trace)])[0,1] for i in np.arange(1,maxlag)]
@@ -166,10 +204,9 @@ class scLL_LVM2:
         C = np.random.multivariate_normal(np.zeros(shape=(self.Dy*self.N*self.Dt)),kron(C_priorcov,np.eye(self.Dy)).todense()).reshape((self.Dy,self.Dt*self.N),order='F')
         e = self._e(C.reshape(self.Dy, self.N, self.Dt), t)
         mu_x = np.matrix(self.sigma_x) * np.matrix(e).T
-        x = np.random.multivariate_normal(mean=np.array(mu_x)[:,0], cov=self.sigma_x)
-        x = 5.0 + (x - np.mean(x)) * (2.0 / np.std(x))
-        x1 = np.floor(np.exp(x))
-        h = [np.random.binomial(int(xi),self.ld) for xi in x1]
-        y = x1 - np.array(h)
-        y = y.reshape((self.Dy,self.N),order="F")
-        return x.reshape((self.Dy,self.N),order="F"), np.log(y + .1), t, C
+        x = np.random.multivariate_normal(mean=np.array(mu_x)[:,0], cov=self.sigma_x).reshape((self.Dy,self.N),order="F")
+        #drop_prob = np.exp(self.ld * -1 * np.exp(x))
+        drop_prob = np.ones(x.shape) * np.exp(-1 *self.ld)
+        h = [np.random.binomial(1,1-prob) for prob in drop_prob]
+        y = x * h
+        return x, y, t, C
