@@ -8,6 +8,7 @@ from networkx.convert_matrix import from_scipy_sparse_matrix as sp_to_nx_graph
 from networkx.algorithms.shortest_paths.weighted import all_pairs_dijkstra_path_length as dijkstra_dists
 from sklearn.neighbors import kneighbors_graph
 
+
 def matrix_normal(A, M, U, V):
     n, p = A.shape
     A = np.matrix(A); M = np.matrix(M); U = np.matrix(U); V = np.matrix(V)
@@ -89,6 +90,26 @@ def initialize_t(G, x):
     t = (t - t.mean()) / t.std()
 
     return t.reshape((1, N))
+
+
+def initialize_C(x, t, G):
+    N = G.shape[0]
+    d_t = t.shape[0]
+    d_x = x.shape[0]
+
+    neighbors = G.tolil().rows
+
+    C = np.empty((d_x, N, d_t))
+    for i in range(N):
+        js = neighbors[i]
+        t_diff = t[:, js] - t[:, [i]]
+        x_diff = x[:, js] - x[:, [i]]
+
+        C_i, _, _, _ = ln.lstsq(t_diff.T, x_diff.T)
+
+        C[:, i, :] = C_i.T
+
+    return C.reshape(d_x, N*d_t)
 
 
 if __name__ == '__main__':
