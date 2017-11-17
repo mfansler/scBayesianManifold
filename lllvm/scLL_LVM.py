@@ -9,7 +9,7 @@ from scipy.linalg import inv
 import scipy.stats
 
 class scLL_LVM:
-    def __init__(self, G, epsilon, alpha, V, Cinit, tinit, xinit, stepsize, yobserved, ld):
+    def __init__(self, G, epsilon, alpha, V, Cinit, tinit, xinit, yobserved, stepsize,  ld):
         """
         G is the N by N nearest-neighbor graph adjacency matrix
         Cinit is the Dy by N*Dt matrix of initial linear maps
@@ -50,22 +50,22 @@ class scLL_LVM:
         #latent and observed variables
         self.C, self.t = Cinit, tinit
         self.e = self._e(self.C.reshape(self.Dy, self.N, self.Dt), self.t)
-        yflat = yobserved.reshape((self.N*self.Dy,1), order='F').T
+        yflat = yobserved.reshape((self.N*self.Dy,1), order='F')
         self.dropouts = np.where(yflat==0)[0] #indexing as in the mu_x vector
         self.observed = np.where(yflat!=0)[0] #indexing as in the mu_x vector
         self.Nobserved = len(self.observed); self.N0 = self.N - self.Nobserved
-        xflat = xinit.reshape((self.N*self.Dy,1), order = 'F').T
+        xflat = xinit.reshape((self.N*self.Dy,1), order = 'F')
         self.x0 = xflat[self.dropouts]
         self.yobserved = yflat[self.observed]
-        self.sigma_x0 = self.sigma_x[self.dropouts,self.dropouts]
-        self.sigma_xobserved = self.sigma_x[self.observed,self.observed]
-        self.sigma_x_inv0 = self.sigma_x_inv[self.dropouts,self.dropouts]
-        self.sigma_x_invobserved = self.sigma_x_inv[self.observed,self.observed]
+        self.sigma_x0 = self.sigma_x[self.dropouts,:][:,self.dropouts]
+        self.sigma_xobserved = self.sigma_x[self.observed,:][:,self.observed]
+        self.sigma_x_inv0 = self.sigma_x_inv[self.dropouts,:][:,self.dropouts]
+        self.sigma_x_invobserved = self.sigma_x_inv[self.observed,:][:,self.observed]
 
         # final means
-        self.C_mean = Cinit
-        self.t_mean = tinit
-        self.x0_mean = self.x0
+        self.C_mean = np.zeros(Cinit.shape)
+        self.t_mean = np.zeros(tinit.shape)
+        self.x0_mean = np.zeros(self.x0.shape)
 
         #this needs to be recomputed every time
         self.x_SigX_x0 = self.x0.T.dot(self.sigma_x_inv0.dot(self.x0))
@@ -73,12 +73,12 @@ class scLL_LVM:
         self.x_SigX_xobserved = self.yobserved.T.dot(self.sigma_x_invobserved.dot(self.yobserved))
         
         # counts
-        self.num_samples, self.accept_rate = 0, 0
+        self.num_samples, self.num_samples_tot, self.accept_rate = 0, 0, 0
 
-        self.Cprop, self.tprop, self.eprop = self.C, self.t, self.e
+        self.Cprop, self.tprop, self.eprop, self.x0prop = self.C, self.t, self.e, self.x0
 
         # initialize variables to store trace and likelihood
-        self.trace, self.likelihoods = [], [self.likelihood()]
+        self.trace, self.trace_x, self.likelihoods = [], [], [self.likelihood()]
         
         self.Pi = kron(chol_inv(self.alpha * np.eye(self.N) + 2*self.L) , np.eye(self.Dt))
         self.C_priorcov = chol_inv(self.C_priorprc.todense())
@@ -112,12 +112,14 @@ class scLL_LVM:
 
         Cfactor = matrix_normal_log_star_std(C, self.C_priorprc)
         tfactor = matrix_normal_log_star_std(t, self.t_priorprc)
-        xfactorobserved = self._loglik_x_starobserved(e[self.observed])
+        xfactorobserved = self._loglik_xobserved_star(e[self.observed])
         xfactor0 = self._loglik_x0_star(e[self.dropouts],x0)
-        dropouts = np.sum(self.x0prop) + self.N * self.ld
-
+        #dropouts = np.sum(np.exp(self.x0prop)) * self.ld * -1
         # print(Cfactor, tfactor, xfactor)
-        return (Cfactor + tfactor + xfactorobserved + xfactor0 + dropouts)[0]
+        return (Cfactor + tfactor + xfactorobserved + xfactor0)[0]
+    
+    def set_stepsize(self,new_step):
+        self.stepsize = new_step
     
     # update with Metropolis-Hastings step
     def update(self):
@@ -148,19 +150,22 @@ class scLL_LVM:
         self.Cprop = self.C + np.random.randn(self.Dy, self.N*self.Dt)*self.stepsize
         self.tprop = self.t + np.random.randn(self.Dt, self.N)*self.stepsize
         self.eprop = self._e(self.Cprop.reshape(self.Dy, self.N, self.Dt), self.tprop)
-        self.x0prop = self.x0 + np.random.randn(self.Dt, self.N)*self.stepsize
+        self.x0prop = self.x0 + np.random.randn(len(self.dropouts), 1)*self.stepsize
 
     def MH_step(self, burn_in=False):
         self.propose()
         accept = self.update()
         self.trace.append(self.t[0,0])
+        self.trace_x.append(self.x0[0,0])
+        self.num_samples_tot +=1
+        self.accept_rate = ((self.num_samples_tot - 1)*self.accept_rate + accept)/float(self.num_samples_tot)
         if not burn_in:
             self.num_samples += 1
-            self.accept_rate = ((self.num_samples - 1)*self.accept_rate + accept)/self.num_samples
+            #self.accept_rate = ((self.num_samples - 1)*self.accept_rate + accept)/self.num_samples
             self.C_mean = ((self.num_samples - 1)*self.C_mean + self.C)/float(self.num_samples)
             self.t_mean = ((self.num_samples - 1)*self.t_mean + self.t)/float(self.num_samples)
             self.x0_mean = ((self.num_samples - 1)*self.x0_mean + self.x0)/float(self.num_samples)
-    
+
     def autocorrelation(self,maxlag):
         trace = np.array(self.trace)[np.arange(self.num_samples,len(self.trace))]
         return [np.corrcoef(trace[0:len(trace)-i], trace[i:len(trace)])[0,1] for i in np.arange(1,maxlag)]
@@ -173,7 +178,8 @@ class scLL_LVM:
         e = self._e(C.reshape(self.Dy, self.N, self.Dt), t)
         mu_x = np.matrix(self.sigma_x) * np.matrix(e).T
         x = np.random.multivariate_normal(mean=np.array(mu_x)[:,0], cov=self.sigma_x).reshape((self.Dy,self.N),order="F")
-        drop_prob = np.exp(ld * -1 * x)
-        h = [np.random.binomial(1,prob) for prob in drop_prob]
-        x = x * h 
-        return x, t, C
+        #drop_prob = np.exp(self.ld * -1 * np.exp(x))
+        drop_prob = np.ones(x.shape) * np.exp(-1 *self.ld)
+        h = [np.random.binomial(1,1-prob) for prob in drop_prob]
+        y = x * h
+        return y, x, t, C
