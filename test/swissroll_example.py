@@ -1,14 +1,14 @@
 from sklearn import datasets, neighbors, preprocessing
 import numpy as np
-#import matplotlib.pyplot as plt
-#from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 from lllvm import LL_LVM
+from lllvm.utils import infer_graph, initialize_C, initialize_t
+from lllvm.plot import plot_G, plot_C_arrows
 
-data = datasets.make_swiss_roll(500, 0.01)
-#x = preprocessing.normalize(data[0])
-x = data[0] / np.sum(data[0],0)
+x, t_true = datasets.make_swiss_roll(500, 0.01)
+x = (x - x.mean(0)) / x.std(0)
 x = x.T
-t_true = data[1].T
 Dy, N = x.shape
 Dt = 1
 
@@ -17,13 +17,19 @@ Dt = 1
 # ax.scatter(x[0,:], x[1,:], x[2,:], c=t_true, marker='o')
 # plt.show()
 
-tinit = np.random.uniform(-1.5, 1.5, size=(Dt, N))
-Cinit = 0.25*np.random.randn(Dy, N*Dt)
 
 # build (undirected) nearest neighbor graph
-G = neighbors.kneighbors_graph(x.T, 9, mode='connectivity')
-G = G + G.T
-G.data = np.ones_like(G.data)
+G = infer_graph(x, k=10, keep_asymmetries=False, delta=2.5)
+t_init = initialize_t(G, x)
+C_init = initialize_C(x, t_init, G)
+
+ax = plot_G(t_true, x, G)
+ax.view_init(10, -80)
+plt.show()
+
+ax = plot_C_arrows(x, t_true.reshape((1,N)), C_init, scale_C=1/20)
+ax.view_init(10, -80)
+plt.show()
 
 # set user-defined parameters
 alpha = 1.0
@@ -31,7 +37,7 @@ gamma = 5.0
 epsilon = .00001
 V = np.identity(Dy) / gamma
 
-model = LL_LVM(G, epsilon, alpha, V, Cinit, tinit, x, .0005)
+model = LL_LVM(G, epsilon, alpha, V, C_init, t_init, x, .0005)
 
 for i in range(100):
     print(i)

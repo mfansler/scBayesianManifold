@@ -2,6 +2,11 @@ import numpy as np
 import numpy.linalg as ln
 from scipy.linalg import solve_triangular
 from scipy.stats import ortho_group
+from scipy.sparse.csgraph import connected_components
+from scipy.spatial.distance import pdist, squareform
+from networkx.convert_matrix import from_scipy_sparse_matrix as sp_to_nx_graph
+from networkx.algorithms.shortest_paths.weighted import all_pairs_dijkstra_path_length as dijkstra_dists
+from sklearn.neighbors import kneighbors_graph
 
 
 def matrix_normal(A, M, U, V):
@@ -40,6 +45,71 @@ def randspd(n):
     D = np.diag(np.arange(0.5, 2, 1.5 / n))  # eigenvalues
     Q = ortho_group.rvs(n)  # random rotation
     return ln.multi_dot([Q, D, Q.T])
+
+
+def infer_graph(x, k=5, keep_asymmetries=True, delta=2):
+    # retrieve distance graph
+    D = kneighbors_graph(x.T, k, mode='distance')
+    # remove edges greater than delta*std
+    D.data = np.multiply(D.data, D.data < (D.data.mean() + delta*D.data.std()))
+    D.eliminate_zeros()
+
+    # Adjacency Matrix
+    G = D.copy()
+    G.data = np.ones_like(G.data)
+    # symmetrize
+    G = G + G.T
+    G.data = np.heaviside(G.data - 1, keep_asymmetries)
+    G.eliminate_zeros()
+
+    # ToDo: Add code to reconnect multicomponents
+
+    return G
+
+
+def initialize_t(G, x):
+    N = G.shape[0]
+    D = G.multiply(squareform(pdist(x.T)))
+    H = sp_to_nx_graph(D)
+
+    max_dist = 0
+    max_t = None
+
+    # find the node furtherest from all others
+    for (i, ds) in dijkstra_dists(H):
+        cur_dist = ln.norm(list(ds.values()))
+        if cur_dist > max_dist:
+            max_dist = cur_dist
+            max_t = ds
+
+    # extract distances
+    t = sorted([(k, v) for k, v in max_t.items()], key=lambda tp: tp[0])
+    t = np.array([entry[1] for entry in t])
+
+    # standardize
+    t = (t - t.mean()) / t.std()
+
+    return t.reshape((1, N))
+
+
+def initialize_C(x, t, G):
+    N = G.shape[0]
+    d_t = t.shape[0]
+    d_x = x.shape[0]
+
+    neighbors = G.tolil().rows
+
+    C = np.empty((d_x, N, d_t))
+    for i in range(N):
+        js = neighbors[i]
+        t_diff = t[:, js] - t[:, [i]]
+        x_diff = x[:, js] - x[:, [i]]
+
+        C_i, _, _, _ = ln.lstsq(t_diff.T, x_diff.T)
+
+        C[:, i, :] = C_i.T
+
+    return C.reshape(d_x, N*d_t)
 
 
 if __name__ == '__main__':
