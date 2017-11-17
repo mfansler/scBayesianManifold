@@ -3,6 +3,9 @@ import numpy.linalg as ln
 from scipy.linalg import solve_triangular
 from scipy.stats import ortho_group
 from scipy.sparse.csgraph import connected_components
+from scipy.spatial.distance import pdist, squareform
+from networkx.convert_matrix import from_scipy_sparse_matrix as sp_to_nx_graph
+from networkx.algorithms.shortest_paths.weighted import all_pairs_dijkstra_path_length as dijkstra_dists
 from sklearn.neighbors import kneighbors_graph
 
 def matrix_normal(A, M, U, V):
@@ -61,6 +64,31 @@ def infer_graph(x, k=5, keep_asymmetries=True, delta=2):
     # ToDo: Add code to reconnect multicomponents
 
     return G
+
+
+def initialize_t(G, x):
+    N = G.shape[0]
+    D = G.multiply(squareform(pdist(x.T)))
+    H = sp_to_nx_graph(D)
+
+    max_dist = 0
+    max_t = None
+
+    # find the node furtherest from all others
+    for (i, ds) in dijkstra_dists(H):
+        cur_dist = ln.norm(list(ds.values()))
+        if cur_dist > max_dist:
+            max_dist = cur_dist
+            max_t = ds
+
+    # extract distances
+    t = sorted([(k, v) for k, v in max_t.items()], key=lambda tp: tp[0])
+    t = np.array([entry[1] for entry in t])
+
+    # standardize
+    t = (t - t.mean()) / t.std()
+
+    return t.reshape((1, N))
 
 
 if __name__ == '__main__':
