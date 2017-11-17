@@ -2,7 +2,8 @@ import numpy as np
 import numpy.linalg as ln
 from scipy.linalg import solve_triangular
 from scipy.stats import ortho_group
-
+from scipy.sparse.csgraph import connected_components
+from sklearn.neighbors import kneighbors_graph
 
 def matrix_normal(A, M, U, V):
     n, p = A.shape
@@ -40,6 +41,26 @@ def randspd(n):
     D = np.diag(np.arange(0.5, 2, 1.5 / n))  # eigenvalues
     Q = ortho_group.rvs(n)  # random rotation
     return ln.multi_dot([Q, D, Q.T])
+
+
+def infer_graph(x, k=5, keep_asymmetries=True, delta=2):
+    # retrieve distance graph
+    D = kneighbors_graph(x.T, k, mode='distance')
+    # remove edges greater than delta*std
+    D.data = np.multiply(D.data, D.data < (D.data.mean() + delta*D.data.std()))
+    D.eliminate_zeros()
+
+    # Adjacency Matrix
+    G = D.copy()
+    G.data = np.ones_like(G.data)
+    # symmetrize
+    G = G + G.T
+    G.data = np.heaviside(G.data - 1, keep_asymmetries)
+    G.eliminate_zeros()
+
+    # ToDo: Add code to reconnect multicomponents
+
+    return G
 
 
 if __name__ == '__main__':
