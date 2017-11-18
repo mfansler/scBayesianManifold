@@ -8,26 +8,27 @@ from scipy.sparse.linalg import inv as sp_inv
 from scipy.linalg import inv
 import scipy.stats
 
+
 class LL_LVM:
-    def __init__(self, G, epsilon, alpha, V, Cinit, tinit, xinit, stepsize, yobserved=0):
+    def __init__(self, G, epsilon, alpha, V_inv, C_init, t_init, x_init, stepsize_t, stepsize_C, yobserved=0):
         """
         G is the N by N nearest-neighbor graph adjacency matrix
-        Cinit is the Dy by N*Dt matrix of initial linear maps
-        tinit is the Dt by N matrix of initial low-dimensional embeddings
-        xinit is the Dy by N matrix of initial true expression
+        C_init is the Dy by N*Dt matrix of initial linear maps
+        t_init is the Dt by N matrix of initial low-dimensional embeddings
+        x_init is the Dy by N matrix of initial true expression
         yobserved is the Dy by N observed expression
         """
         # pre-compute fixed parameters #
         # dims
         self.N = G.shape[0]
-        self.Dy = xinit.shape[0]
-        self.Dt = tinit.shape[0]
+        self.Dy = x_init.shape[0]
+        self.Dt = t_init.shape[0]
 
         # constants
-        self.alpha, self.epsilon, self.stepsize = alpha, epsilon, stepsize
+        self.alpha, self.epsilon = alpha, epsilon
+        self.stepsize_C, self.stepsize_t = stepsize_C, stepsize_t
 
-        self.V = V
-        self.Vinv = chol_inv(V)
+        self.V_inv = V_inv
         self.J = kron(np.ones(shape=(self.N, 1)), eye(self.Dt))
 
         # graph laplacian
@@ -35,7 +36,7 @@ class LL_LVM:
         
         # precision matrices
         self.omega_inv = kron(2*self.L, eye(self.Dt))
-        self.sigma_x_inv = kron(np.full((self.N, self.N), self.epsilon), eye(self.Dy)) + kron(2*self.L, self.Vinv)
+        self.sigma_x_inv = kron(np.full((self.N, self.N), self.epsilon), eye(self.Dy)) + kron(2 * self.L, self.V_inv)
 
         # ToDo: Can we avoid computing this?
         self.sigma_x = chol_inv(self.sigma_x_inv.todense())
@@ -49,16 +50,15 @@ class LL_LVM:
 
         # initialize latent variables and observations
         # just put observed if standard LL_LVM
-        self.C, self.t, self.x = Cinit, tinit, xinit
+        self.C, self.t, self.x = C_init, t_init, x_init
         self.xvec = self.x.reshape((self.N*self.Dy, 1), order="F")
         
         self.e = self._e(self.C.reshape(self.Dy, self.N, self.Dt), self.t)
 
         # final means
-        self.C_mean = Cinit
-        self.t_mean = tinit
+        self.C_mean = np.empty_like(C_init)
+        self.t_mean = np.empty_like(t_init)
 
-        # ToDo: Eliminate unnecessary reshaping
         # cache (x * Sig_x * x)
         self.x_SigX_x = self.xvec.T.dot(self.sigma_x_inv.dot(self.xvec))
 
@@ -68,28 +68,34 @@ class LL_LVM:
         self.Cprop, self.tprop, self.eprop = self.C, self.t, self.e
 
         # initialize variables to store trace and likelihood
+        self.ll_comps = {'t': [], 'C': [], 'e': []}
         self.trace, self.likelihoods = [], [self.likelihood()]
-        
-        self.Pi = kron(chol_inv(self.alpha * np.eye(self.N) + 2*self.L) , np.eye(self.Dt))
+
+        self.Pi = np.kron(chol_inv(self.alpha * np.eye(self.N) + 2*self.L), np.eye(self.Dt))
         self.C_priorcov = chol_inv(self.C_priorprc.todense())
+
     def _e(self, C, t):
 
         # precompute differences in t
-        # NB: t[:,i] - t[:,j] = t_diff[i, :, j]
+        # NB: t[:,j] - t[:,i] = t_diff[i, :, j]
         t_diff = np.kron(np.ones((self.N, 1)), t).reshape(self.N, self.Dt, self.N)
         t_diff = t_diff - t_diff.transpose()
+        #assert np.allclose(t[:,[1,2,5]] - t[:,[0]], t_diff[[0],:,[1,2,5]].T), "order is not consistent"
 
         # ToDo: Parallelize this loop
         e = np.empty((self.Dy, self.N))
         for i in range(self.N):
-            e[:, i] = np.sum((C[:,i,:] + C[:,j,:]).dot(t_diff[i, :, j]) for j in self.neighbors[i])
-        e = - self.Vinv.dot(e)
+            js = self.neighbors[i]
+            e[:, i] = np.tensordot(C[:,[i],:] + C[:,js,:], t_diff[[i],:,js])
+            #test = np.sum((C[:,i,:] + C[:,j,:]).dot(t_diff[i, :, j]) for j in self.neighbors[i])
+            #assert np.allclose(e[:,i], test), "tensordot not matching sum"
 
-        return e.flatten(order='F')#.reshape((self.N*self.Dy, 1),order="F")
+        e = - self.V_inv.dot(e)
+
+        return e.flatten(order='F')
 
     def _loglik_x_star(self, e):
-        # ToDo: eliminate reshaping
-        return -.5 * (self.x_SigX_x - 2*self.xvec.T.dot(e) + e.T.dot(self.sigma_x.dot(e)))[0]
+        return float(-.5*(self.x_SigX_x - 2*self.xvec.T.dot(e) + e.T.dot(self.sigma_x.dot(e))))
 
     def _log_MV_normal(self,x,mu,prc):
         x, mu, prc = np.matrix(x), np.matrix(mu).T, np.matrix(prc)
@@ -105,7 +111,10 @@ class LL_LVM:
         xfactor = self._loglik_x_star(e)
 
         # print(Cfactor, tfactor, xfactor)
-        return (Cfactor + tfactor + xfactor)[0]
+        self.ll_comps['e'].append(xfactor)
+        self.ll_comps['C'].append(Cfactor)
+        self.ll_comps['t'].append(tfactor)
+        return Cfactor + tfactor + xfactor
         
     def likelihood2(self):
         
@@ -171,8 +180,8 @@ class LL_LVM:
 
     # propose a new value based on current values
     def propose(self):
-        self.Cprop = self.C + np.random.randn(self.Dy, self.N*self.Dt)*self.stepsize
-        self.tprop = self.t + np.random.randn(self.Dt, self.N)*self.stepsize
+        self.Cprop = self.C + np.random.randn(self.Dy, self.N*self.Dt)*self.stepsize_C
+        self.tprop = self.t + np.random.randn(self.Dt, self.N)*self.stepsize_t
         self.eprop = self._e(self.Cprop.reshape(self.Dy, self.N, self.Dt), self.tprop)
 
         # ToDo: add proposal for x here for noisy version
