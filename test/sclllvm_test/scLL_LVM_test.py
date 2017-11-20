@@ -52,9 +52,9 @@ class scLL_LVM_test:
         self.e = self._e(self.C.reshape(self.Dy, self.N, self.Dt), self.t)
         yflat = yobserved.reshape((self.N*self.Dy,1), order='F')
         self.x = yflat
-        #self.dropouts = np.where(yflat==0)[0] #indexing as in the mu_x vector
-        self.dropouts = np.array([1])
-        self.x[self.dropouts] = xinit.flatten(order="F")[self.dropouts]
+        self.dropouts = np.where(yflat==0)[0] #indexing as in the mu_x vector
+        #self.dropouts = np.array([1])
+        self.x[self.dropouts] = xinit.reshape(self.x.shape,order="F")[self.dropouts]
 
         # final means
         self.C_mean = np.zeros(Cinit.shape)
@@ -63,7 +63,7 @@ class scLL_LVM_test:
 
         #this needs to be recomputed every time
         self.x_SigX_x = self.x.T.dot(self.sigma_x_inv.dot(self.x))
-
+        self.x_SigX_xprop = self.x_SigX_x
         # counts
         self.num_samples, self.num_samples_tot, self.accept_rate, self.a_current = 0, 0, 0, 0
 
@@ -90,18 +90,18 @@ class scLL_LVM_test:
 
         return e.flatten(order='F')#.reshape((self.N*self.Dy, 1),order="F")
     
-    def _loglik_x_star(self, e, x):
+    def _loglik_x_star(self, e, x, x_SigX_x):
         # ToDo: eliminate reshaping
-        return -.5 * (self.x_SigX_x - 2*self.x.T.dot(e) + e.T.dot(self.sigma_x.dot(e)))[0]
+        return -.5 * (x_SigX_x - 2*self.x.T.dot(e) + e.T.dot(self.sigma_x.dot(e)))[0]
     
     # calculate likelihood for proposed latent variables
     def likelihood(self):
         
-        C, t, e, x = self.Cprop, self.tprop, self.eprop, self.xprop
+        C, t, e, x , x_SigX_x = self.Cprop, self.tprop, self.eprop, self.xprop, self.x_SigX_xprop
 
         Cfactor = matrix_normal_log_star_std(C, self.C_priorprc)
         tfactor = matrix_normal_log_star_std(t, self.t_priorprc)
-        xfactor = self._loglik_x_star(e, x)
+        xfactor = self._loglik_x_star(e, x, x_SigX_x)
 
         #print(Cfactor, tfactor, xfactor)
         return (Cfactor + tfactor + xfactor)[0]
@@ -116,6 +116,7 @@ class scLL_LVM_test:
         L = self.likelihoods[-1]
         # calculate acceptance probability
         a = 1.0 if Lprime > L else np.exp(Lprime - L)
+        #print(Lprime, L)
         self.a_current = a
         accept = bernoulli.rvs(a)
         
@@ -125,6 +126,7 @@ class scLL_LVM_test:
             self.t = np.copy(self.tprop)
             self.e = np.copy(self.eprop)
             self.x = np.copy(self.xprop)
+            self.x_SigX_x = np.copy(self.x_SigX_xprop)
             self.likelihoods.append(Lprime)
             # ToDo: add acceptance for x here for noisy version
 
@@ -140,7 +142,7 @@ class scLL_LVM_test:
         self.eprop = self._e(self.Cprop.reshape(self.Dy, self.N, self.Dt), self.tprop)
         self.xprop = np.copy(self.x)
         self.xprop[self.dropouts] = self.x[self.dropouts] + np.random.randn(len(self.dropouts), 1)*self.stepsize
-        self.x_SigX_x = self.xprop.T.dot(self.sigma_x_inv.dot(self.xprop))
+        self.x_SigX_xprop = self.xprop.T.dot(self.sigma_x_inv.dot(self.xprop))
         
     def MH_step(self, burn_in=False):
         self.propose()
@@ -151,7 +153,6 @@ class scLL_LVM_test:
         self.accept_rate = ((self.num_samples_tot - 1)*self.accept_rate + accept)/float(self.num_samples_tot)
         if not burn_in:
             self.num_samples += 1
-            #self.accept_rate = ((self.num_samples - 1)*self.accept_rate + accept)/self.num_samples
             self.C_mean = ((self.num_samples - 1)*self.C_mean + self.C)/float(self.num_samples)
             self.t_mean = ((self.num_samples - 1)*self.t_mean + self.t)/float(self.num_samples)
             self.x_mean = ((self.num_samples - 1)*self.x_mean + self.x)/float(self.num_samples)
@@ -173,11 +174,3 @@ class scLL_LVM_test:
         h = [np.random.binomial(1,1-prob) for prob in drop_prob]
         y = x * h
         return y, x, t, C
-    
-    #old version
-    def _loglik_xobserved_star(self, e):
-        return -.5 * (self.x_SigX_xobserved - 2*self.yobserved.T.dot(e) + 
-            e.T.dot(self.sigma_xobserved.dot(e)))[0]
-
-    def _loglik_x0_star(self, e, x0):
-        return -.5 * (self.x_SigX_x0 - 2*x0.T.dot(e) + e.T.dot(self.sigma_x0.dot(e)))[0]
