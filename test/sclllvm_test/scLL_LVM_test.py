@@ -8,26 +8,28 @@ from scipy.sparse.linalg import inv as sp_inv
 from scipy.linalg import inv
 import scipy.stats
 
+
 class scLL_LVM_test:
-    def __init__(self, G, epsilon, alpha, V, Cinit, tinit, xinit, yobserved, stepsize,  ld):
+    def __init__(self, G, epsilon, alpha, V_inv,
+                 C_init, t_init, x_init, y_obs,
+                 stepsize_C, stepsize_t, stepsize_x, ld):
         """
         G is the N by N nearest-neighbor graph adjacency matrix
-        Cinit is the Dy by N*Dt matrix of initial linear maps
-        tinit is the Dt by N matrix of initial low-dimensional embeddings
-        xinit is the Dy by N matrix of initial true expression
-        yobserved is the Dy by N observed expression
+        C_init is the Dy by N*Dt matrix of initial linear maps
+        t_init is the Dt by N matrix of initial low-dimensional embeddings
+        x_init is the Dy by N matrix of initial true expression
+        y_obs is the Dy by N observed expression
         """
         # pre-compute fixed parameters #
         # dims
         self.N = G.shape[0]
-        self.Dy = xinit.shape[0]
-        self.Dt = tinit.shape[0]
+        self.Dy = x_init.shape[0]
+        self.Dt = t_init.shape[0]
 
         # constants
-        self.alpha, self.epsilon, self.ld, self.stepsize = alpha, epsilon, ld, stepsize
-
-        self.V = V
-        self.Vinv = chol_inv(V)
+        self.alpha, self.epsilon, self.ld = alpha, epsilon, ld
+        self.stepsize_C, self.stepsize_t, self.stepsize_x = stepsize_C, stepsize_t, stepsize_x
+        self.V_inv = V_inv
         self.J = kron(np.ones(shape=(self.N, 1)), eye(self.Dt))
 
         # graph laplacian
@@ -35,7 +37,7 @@ class scLL_LVM_test:
 
         # precision matrices
         self.omega_inv = kron(2*self.L, eye(self.Dt))
-        self.sigma_x_inv = kron(np.full((self.N, self.N), self.epsilon), eye(self.Dy)) + kron(2*self.L, self.Vinv)
+        self.sigma_x_inv = kron(np.full((self.N, self.N), self.epsilon), eye(self.Dy)) + kron(2 * self.L, self.V_inv)
 
         # ToDo: Can we avoid computing this?
         self.sigma_x = chol_inv(self.sigma_x_inv.todense())
@@ -48,66 +50,74 @@ class scLL_LVM_test:
         self.neighbors = G.tolil().rows
 
         #latent and observed variables
-        self.C, self.t = Cinit, tinit
+        self.C, self.t = C_init, t_init
         self.e = self._e(self.C.reshape(self.Dy, self.N, self.Dt), self.t)
-        yflat = yobserved.reshape((self.N*self.Dy,1), order='F')
+        yflat = y_obs.reshape((self.N * self.Dy, 1), order='F')
         self.x = yflat
+        # ToDo: Czech this
         self.dropouts = np.where(yflat==0)[0] #indexing as in the mu_x vector
-        #self.dropouts = np.array([1])
-        self.x[self.dropouts] = xinit.reshape(self.x.shape,order="F")[self.dropouts]
+        self.x[self.dropouts] = x_init.reshape(self.x.shape, order="F")[self.dropouts]
 
         # final means
-        self.C_mean = np.zeros(Cinit.shape)
-        self.t_mean = np.zeros(tinit.shape)
-        self.x_mean = np.zeros(self.x.shape)
+        self.C_mean = np.empty_like(C_init)
+        self.t_mean = np.empty_like(t_init)
+        self.x_mean = np.empty_like(self.x)
 
-        #this needs to be recomputed every time
+        # this needs to be recomputed every time
         self.x_SigX_x = self.x.T.dot(self.sigma_x_inv.dot(self.x))
         self.x_SigX_xprop = self.x_SigX_x
+
         # counts
-        self.num_samples, self.num_samples_tot, self.accept_rate, self.a_current = 0, 0, 0, 0
+        self.num_samples = self.num_samples_tot = self.accept_rate = self.a_current = 0
 
         self.Cprop, self.tprop, self.eprop, self.xprop = self.C, self.t, self.e, self.x
 
         # initialize variables to store trace and likelihood
+        self.ll_comp_C, self.ll_comp_t, self.ll_comp_x = [], [], []
         self.trace, self.trace_x, self.likelihoods = [], [], [self.likelihood()]
-        
+
+        # constants for simulation
         self.Pi = kron(chol_inv(self.alpha * np.eye(self.N) + 2*self.L) , np.eye(self.Dt))
         self.C_priorcov = chol_inv(self.C_priorprc.todense())
         
     def _e(self, C, t):
 
         # precompute differences in t
-        # NB: t[:,i] - t[:,j] = t_diff[i, :, j]
+        # NB: t[:,j] - t[:,i] = t_diff[i, :, j]
         t_diff = np.kron(np.ones((self.N, 1)), t).reshape(self.N, self.Dt, self.N)
         t_diff = t_diff - t_diff.transpose()
 
         # ToDo: Parallelize this loop
         e = np.empty((self.Dy, self.N))
         for i in range(self.N):
-            e[:, i] = np.sum((C[:,i,:] + C[:,j,:]).dot(t_diff[i, :, j]) for j in self.neighbors[i])
-        e = - self.Vinv.dot(e)
+            js = self.neighbors[i]
+            e[:, i] = np.tensordot(C[:,[i],:] + C[:,js,:], t_diff[[i],:,js])
+            # simple_e = np.sum((C[:,i,:] + C[:,j,:]).dot(t_diff[i, :, j]) for j in self.neighbors[i])
+            # assert np.allclose(e[:, i], simple_e), "tensordot not matching sum"
+        e = - self.V_inv.dot(e)
 
-        return e.flatten(order='F')#.reshape((self.N*self.Dy, 1),order="F")
+        return e.flatten(order='F')
     
     def _loglik_x_star(self, e, x, x_SigX_x):
-        # ToDo: eliminate reshaping
-        return -.5 * (x_SigX_x - 2*self.x.T.dot(e) + e.T.dot(self.sigma_x.dot(e)))[0]
+        return float(-.5*(x_SigX_x - 2*x.T.dot(e) + e.T.dot(self.sigma_x.dot(e))))
     
     # calculate likelihood for proposed latent variables
     def likelihood(self):
         
-        C, t, e, x , x_SigX_x = self.Cprop, self.tprop, self.eprop, self.xprop, self.x_SigX_xprop
+        C, t, e, x, x_SigX_x = self.Cprop, self.tprop, self.eprop, self.xprop, self.x_SigX_xprop
 
         Cfactor = matrix_normal_log_star_std(C, self.C_priorprc)
         tfactor = matrix_normal_log_star_std(t, self.t_priorprc)
         xfactor = self._loglik_x_star(e, x, x_SigX_x)
 
-        #print(Cfactor, tfactor, xfactor)
-        return (Cfactor + tfactor + xfactor)[0]
+        self.ll_comp_C.append(Cfactor)
+        self.ll_comp_t.append(tfactor)
+        self.ll_comp_x.append(xfactor)
+
+        return Cfactor + tfactor + xfactor
     
-    def set_stepsize(self,new_step):
-        self.stepsize = new_step
+    def set_stepsize(self, new_step):
+        self.stepsize_C = new_step
     
     # update with Metropolis-Hastings step
     def update(self):
@@ -128,7 +138,6 @@ class scLL_LVM_test:
             self.x = np.copy(self.xprop)
             self.x_SigX_x = np.copy(self.x_SigX_xprop)
             self.likelihoods.append(Lprime)
-            # ToDo: add acceptance for x here for noisy version
 
         else:
             self.likelihoods.append(L)
@@ -137,11 +146,11 @@ class scLL_LVM_test:
 
     # propose a new value based on current values
     def propose(self):
-        self.Cprop = self.C + np.random.randn(self.Dy, self.N*self.Dt)*self.stepsize
-        self.tprop = self.t + np.random.randn(self.Dt, self.N)*self.stepsize
+        self.Cprop = self.C + np.random.randn(self.Dy, self.N*self.Dt)*self.stepsize_C
+        self.tprop = self.t + np.random.randn(self.Dt, self.N)*self.stepsize_t
         self.eprop = self._e(self.Cprop.reshape(self.Dy, self.N, self.Dt), self.tprop)
         self.xprop = np.copy(self.x)
-        self.xprop[self.dropouts] = self.x[self.dropouts] + np.random.randn(len(self.dropouts), 1)*self.stepsize
+        self.xprop[self.dropouts] = self.x[self.dropouts] + np.random.randn(len(self.dropouts), 1)*self.stepsize_x
         self.x_SigX_xprop = self.xprop.T.dot(self.sigma_x_inv.dot(self.xprop))
         
     def MH_step(self, burn_in=False):
@@ -149,7 +158,7 @@ class scLL_LVM_test:
         accept = self.update()
         self.trace.append(self.t[0,0])
         self.trace_x.append(self.x[0])
-        self.num_samples_tot +=1
+        self.num_samples_tot += 1
         self.accept_rate = ((self.num_samples_tot - 1)*self.accept_rate + accept)/float(self.num_samples_tot)
         if not burn_in:
             self.num_samples += 1
