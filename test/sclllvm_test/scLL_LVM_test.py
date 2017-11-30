@@ -12,7 +12,8 @@ import scipy.stats
 class scLL_LVM_test:
     def __init__(self, G, epsilon, alpha, V_inv,
                  C_init, t_init, x_init, y_obs,
-                 stepsize_C, stepsize_t, stepsize_x, ld):
+                 stepsize_C, stepsize_t, stepsize_x, ld,
+                 history_step=1000):
         """
         G is the N by N nearest-neighbor graph adjacency matrix
         C_init is the Dy by N*Dt matrix of initial linear maps
@@ -31,6 +32,7 @@ class scLL_LVM_test:
         self.stepsize_C, self.stepsize_t, self.stepsize_x = stepsize_C, stepsize_t, stepsize_x
         self.V_inv = V_inv
         self.J = kron(np.ones(shape=(self.N, 1)), eye(self.Dt))
+        self.history_step = history_step
 
         # graph laplacian
         self.L = laplacian(G)
@@ -62,6 +64,11 @@ class scLL_LVM_test:
         self.C_mean = np.empty_like(C_init)
         self.t_mean = np.empty_like(t_init)
         self.x_mean = np.empty_like(self.x)
+
+        # history
+        self.history = {'C': [np.copy(self.C)], 'C_mean': [],
+                        't': [np.copy(self.t)], 't_mean': [],
+                        'x': [np.copy(self.x)], 'x_mean': []}
 
         # this needs to be recomputed every time
         self.x_SigX_x = self.x.T.dot(self.sigma_x_inv.dot(self.x))
@@ -159,12 +166,25 @@ class scLL_LVM_test:
         self.trace.append(self.t[0,0])
         self.trace_x.append(self.x[0])
         self.num_samples_tot += 1
+
+        # append history
+        if self.num_samples_tot % self.history_step == 0:
+            self.history['C'].append(np.copy(self.C))
+            self.history['t'].append(np.copy(self.t))
+            self.history['x'].append(np.copy(self.x))
+
         self.accept_rate = ((self.num_samples_tot - 1)*self.accept_rate + accept)/float(self.num_samples_tot)
         if not burn_in:
             self.num_samples += 1
             self.C_mean = ((self.num_samples - 1)*self.C_mean + self.C)/float(self.num_samples)
             self.t_mean = ((self.num_samples - 1)*self.t_mean + self.t)/float(self.num_samples)
             self.x_mean = ((self.num_samples - 1)*self.x_mean + self.x)/float(self.num_samples)
+
+            # append history
+            if self.num_samples % self.history_step == 0:
+                self.history['C_mean'].append(np.copy(self.C_mean))
+                self.history['t_mean'].append(np.copy(self.t_mean))
+                self.history['x_mean'].append(np.copy(self.x_mean))
 
     def autocorrelation(self,maxlag):
         trace = np.array(self.trace)[np.arange(self.num_samples,len(self.trace))]
